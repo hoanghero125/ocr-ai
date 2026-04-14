@@ -170,26 +170,32 @@ class OCRProcessor:
             )
 
             if payload.callback_url:
-                await self._webhook.send(
-                    payload.callback_url,
-                    {
-                        "job_id": job_id,
-                        "status": status.value,
-                        "result_url": result_url,
-                        "errors": result.errors,
-                        "metadata": payload.metadata,
-                    },
-                    job_id=job_id,
-                )
+                try:
+                    await self._webhook.send(
+                        payload.callback_url,
+                        {
+                            "job_id": job_id,
+                            "status": status.value,
+                            "result_url": result_url,
+                            "errors": result.errors,
+                            "metadata": payload.metadata,
+                        },
+                        job_id=job_id,
+                    )
+                except Exception as webhook_exc:
+                    log.warning("webhook_send_error", extra={"error": str(webhook_exc)})
 
         except Exception as exc:
             log.error("processor_failed", extra={"error": str(exc)}, exc_info=True)
             self._repo.update_status(job_id, JobStatus.FAILED, error=str(exc))
 
             if payload.callback_url:
-                await self._webhook.send(
-                    payload.callback_url,
-                    {"job_id": job_id, "status": "failed", "error": str(exc)},
-                    job_id=job_id,
-                )
+                try:
+                    await self._webhook.send(
+                        payload.callback_url,
+                        {"job_id": job_id, "status": "failed", "error": str(exc)},
+                        job_id=job_id,
+                    )
+                except Exception as webhook_exc:
+                    log.warning("webhook_send_error", extra={"error": str(webhook_exc)})
             raise

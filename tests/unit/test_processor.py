@@ -229,3 +229,63 @@ async def test_uncaught_exception_marks_job_failed():
 
     failed_call = repo.update_status.call_args_list[-1]
     assert failed_call.args[1] == JobStatus.FAILED
+
+
+@pytest.mark.asyncio
+async def test_extraction_checkpoint_only_reprocesses_pending_pages():
+    done_page = PageResult(
+        page_number=1,
+        markdown="done",
+        fields=[ExtractedField(key="x", label="X", value="y", confidence=1.0)],
+    )
+    pending_page = PageResult(page_number=2, markdown="pending")
+
+    processor, ocr_stage, extraction_stage, checkpoint, _, _ = _make_processor(
+        pages=[done_page, pending_page]
+    )
+    checkpoint.load_extraction_checkpoint.return_value = [done_page, pending_page]
+    extraction_stage.run = AsyncMock(return_value=[pending_page])
+
+    payload = _make_payload(
+        field_instructions=(FieldInstruction(key="x", label="X"),),
+        extraction_checkpoint_key="checkpoints/job-1/extraction.json",
+        ocr_checkpoint_key="checkpoints/job-1/ocr.json",
+    )
+    ctx = MagicMock()
+    ctx.get_remaining_time_in_millis.return_value = 999_999
+
+    await processor.process(payload, context=ctx)
+
+    called_pages = extraction_stage.run.call_args.kwargs.get("pages") \
+        or extraction_stage.run.call_args.args[0]
+    # Only the pending page (no fields, no error) should be sent to extraction
+    assert all(not p.fields and not p.error for p in called_pages)
+
+
+@pytest.mark.asyncio
+async def test_failed_job_sends_failure_webhook():
+    processor, ocr_stage, _, _, repo, _ = _make_processor()
+    ocr_stage.run = AsyncMock(side_effect=RuntimeError("ocr failed"))
+    payload = _make_payload(callback_url="https://example.com/callback")
+    ctx = MagicMock()
+    ctx.get_remaining_time_in_millis.return_value = 999_999
+
+    with pytest.raises(RuntimeError):
+        await processor.process(payload, context=ctx)
+
+    processor._webhook.send.assert_called_once()
+    call_args = processor._webhook.send.call_args.args
+    assert call_args[1]["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_failed_job_webhook_error_still_reraises_original():
+    processor, ocr_stage, _, _, _, _ = _make_processor()
+    ocr_stage.run = AsyncMock(side_effect=RuntimeError("ocr failed"))
+    processor._webhook.send = AsyncMock(side_effect=Exception("webhook down"))
+    payload = _make_payload(callback_url="https://example.com/callback")
+    ctx = MagicMock()
+    ctx.get_remaining_time_in_millis.return_value = 999_999
+
+    with pytest.raises(RuntimeError, match="ocr failed"):
+        await processor.process(payload, context=ctx)

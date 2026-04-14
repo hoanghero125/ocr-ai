@@ -31,8 +31,7 @@ def _make_container(processor_mock: MagicMock) -> MagicMock:
     return container
 
 
-@pytest.mark.asyncio
-async def test_valid_message_processes_successfully():
+def test_valid_message_processes_successfully():
     processor = MagicMock()
     processor.process = AsyncMock()
     container = _make_container(processor)
@@ -44,8 +43,7 @@ async def test_valid_message_processes_successfully():
     processor.process.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_failed_message_appears_in_batch_item_failures():
+def test_failed_message_appears_in_batch_item_failures():
     processor = MagicMock()
     processor.process = AsyncMock(side_effect=RuntimeError("boom"))
     container = _make_container(processor)
@@ -56,8 +54,7 @@ async def test_failed_message_appears_in_batch_item_failures():
     assert result == {"batchItemFailures": [{"itemIdentifier": "msg-fail"}]}
 
 
-@pytest.mark.asyncio
-async def test_other_messages_still_processed_after_one_failure():
+def test_other_messages_still_processed_after_one_failure():
     call_count = 0
 
     async def process_side_effect(payload, context):
@@ -83,8 +80,7 @@ async def test_other_messages_still_processed_after_one_failure():
     assert call_count == 3  # all three records were attempted
 
 
-@pytest.mark.asyncio
-async def test_direct_invocation_continuation_routed_correctly():
+def test_direct_invocation_continuation_routed_correctly():
     processor = MagicMock()
     processor.process = AsyncMock()
     container = _make_container(processor)
