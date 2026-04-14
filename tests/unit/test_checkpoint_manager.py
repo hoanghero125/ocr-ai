@@ -23,6 +23,7 @@ def _make_manager(write_result: bool = True) -> tuple[CheckpointManager, MagicMo
     store = MagicMock()
     repo = MagicMock()
     repo.conditional_write_checkpoint.return_value = write_result
+    repo.conditional_write_extraction_checkpoint.return_value = write_result
     return CheckpointManager(store=store, repo=repo), store, repo
 
 
@@ -66,11 +67,27 @@ async def test_save_after_extraction_calls_put_pages():
 
 
 @pytest.mark.asyncio
+async def test_save_after_extraction_calls_conditional_write():
+    manager, _, repo = _make_manager()
+    await manager.save_after_extraction("job-1", _make_pages(), _make_payload(continuation_count=2))
+    repo.conditional_write_extraction_checkpoint.assert_called_once()
+    key = repo.conditional_write_extraction_checkpoint.call_args.kwargs["idempotency_key"]
+    assert key == "extraction-job-1-002"
+
+
+@pytest.mark.asyncio
 async def test_save_after_extraction_returns_updated_payload():
     manager, _, _ = _make_manager()
     new_payload = await manager.save_after_extraction("job-1", _make_pages(), _make_payload(continuation_count=1))
     assert new_payload.extraction_checkpoint_key == "checkpoints/job-1/extraction.json"
     assert new_payload.continuation_count == 2
+
+
+@pytest.mark.asyncio
+async def test_save_after_extraction_duplicate_still_returns_updated_payload():
+    manager, _, _ = _make_manager(write_result=False)
+    new_payload = await manager.save_after_extraction("job-1", _make_pages(), _make_payload())
+    assert new_payload.extraction_checkpoint_key is not None
 
 
 def test_load_ocr_checkpoint_delegates_to_store():

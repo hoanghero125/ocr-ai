@@ -1,3 +1,13 @@
+# ── API Gateway access log group ──────────────────────────────────────────────
+
+resource "aws_cloudwatch_log_group" "api_gateway" {
+  name              = "/aws/apigateway/${local.prefix}"
+  retention_in_days = 30
+  tags              = local.common_tags
+}
+
+# ── CloudWatch metric alarms ──────────────────────────────────────────────────
+
 resource "aws_cloudwatch_metric_alarm" "processor_failed_errors" {
   alarm_name          = "${local.prefix}-processor-failed-errors"
   comparison_operator = "GreaterThanThreshold"

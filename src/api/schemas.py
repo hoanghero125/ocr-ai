@@ -6,7 +6,11 @@ from typing import Any
 from pydantic import BaseModel, field_validator, model_validator
 
 _KEY_PATTERN = re.compile(r"^[a-zA-Z0-9_]+$")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 _MAX_FIELD_INSTRUCTIONS = 50
+_MAX_KEY_LEN = 50
+_MAX_LABEL_LEN = 200
+_MAX_DESCRIPTION_LEN = 500
 
 
 class FieldInstructionSchema(BaseModel):
@@ -20,6 +24,26 @@ class FieldInstructionSchema(BaseModel):
     def key_must_be_alphanumeric(cls, v: str) -> str:
         if not _KEY_PATTERN.match(v):
             raise ValueError("key must match ^[a-zA-Z0-9_]+$")
+        if len(v) > _MAX_KEY_LEN:
+            raise ValueError(f"key must not exceed {_MAX_KEY_LEN} characters")
+        return v
+
+    @field_validator("label")
+    @classmethod
+    def label_must_be_clean(cls, v: str) -> str:
+        if _CONTROL_CHAR_RE.search(v):
+            raise ValueError("label must not contain control characters")
+        if len(v) > _MAX_LABEL_LEN:
+            raise ValueError(f"label must not exceed {_MAX_LABEL_LEN} characters")
+        return v
+
+    @field_validator("description")
+    @classmethod
+    def description_must_be_clean(cls, v: str) -> str:
+        if _CONTROL_CHAR_RE.search(v):
+            raise ValueError("description must not contain control characters")
+        if len(v) > _MAX_DESCRIPTION_LEN:
+            raise ValueError(f"description must not exceed {_MAX_DESCRIPTION_LEN} characters")
         return v
 
     @field_validator("min_confidence")
@@ -42,6 +66,13 @@ class ProcessRequest(BaseModel):
     options: ProcessOptions = ProcessOptions()
     field_instructions: list[FieldInstructionSchema] = []
     metadata: dict[str, Any] = {}
+
+    @field_validator("pdf_url")
+    @classmethod
+    def pdf_url_must_be_http(cls, v: str) -> str:
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("pdf_url must be an http or https URL")
+        return v
 
     @model_validator(mode="after")
     def check_field_instructions_limit(self) -> "ProcessRequest":

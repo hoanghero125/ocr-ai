@@ -97,7 +97,7 @@ class JobRepository:
         checkpoint_data: dict,
     ) -> bool:
         """
-        Write checkpoint only if idempotency_key attribute does not already exist.
+        Write OCR checkpoint only if idempotency_key attribute does not already exist.
         Returns True if written, False if the key already existed (duplicate invocation).
         """
         from botocore.exceptions import ClientError
@@ -111,6 +111,47 @@ class JobRepository:
                     "updated_at = :updated_at"
                 ),
                 ConditionExpression=Attr("idempotency_key").not_exists(),
+                ExpressionAttributeValues={
+                    ":checkpoint": checkpoint_data,
+                    ":ikey": idempotency_key,
+                    ":updated_at": _now_iso(),
+                },
+            )
+            return True
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                return False
+            raise
+
+    def conditional_write_extraction_checkpoint(
+        self,
+        job_id: str,
+        idempotency_key: str,
+        checkpoint_data: dict,
+    ) -> bool:
+        """
+        Write extraction checkpoint only if this continuation hasn't been recorded yet.
+
+        Uses a separate extraction_idempotency_key attribute with a not_exists OR lt
+        condition, allowing forward progress across continuations while preventing
+        duplicate writes within the same continuation invocation.
+
+        Returns True if written, False if this continuation was already checkpointed.
+        """
+        from botocore.exceptions import ClientError
+
+        try:
+            self._table.update_item(
+                Key={"job_id": job_id},
+                UpdateExpression=(
+                    "SET checkpoint = :checkpoint, "
+                    "extraction_idempotency_key = :ikey, "
+                    "updated_at = :updated_at"
+                ),
+                ConditionExpression=(
+                    Attr("extraction_idempotency_key").not_exists()
+                    | Attr("extraction_idempotency_key").lt(idempotency_key)
+                ),
                 ExpressionAttributeValues={
                     ":checkpoint": checkpoint_data,
                     ":ikey": idempotency_key,

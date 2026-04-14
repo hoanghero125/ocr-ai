@@ -126,3 +126,40 @@ def test_conditional_write_reraises_other_client_errors():
     )
     with pytest.raises(ClientError):
         repo.conditional_write_checkpoint("job-1", "ocr-job-1", {})
+
+
+# ── conditional_write_extraction_checkpoint ───────────────────────────────────
+
+def test_extraction_conditional_write_returns_true_on_success():
+    repo, table = _make_repo()
+    table.update_item.return_value = {}
+    result = repo.conditional_write_extraction_checkpoint("job-1", "extraction-job-1-001", {"stage": "extraction"})
+    assert result is True
+
+
+def test_extraction_conditional_write_returns_false_on_duplicate():
+    repo, table = _make_repo()
+    table.update_item.side_effect = ClientError(
+        {"Error": {"Code": "ConditionalCheckFailedException", "Message": "condition failed"}},
+        "UpdateItem",
+    )
+    result = repo.conditional_write_extraction_checkpoint("job-1", "extraction-job-1-001", {})
+    assert result is False
+
+
+def test_extraction_conditional_write_uses_extraction_idempotency_key():
+    repo, table = _make_repo()
+    table.update_item.return_value = {}
+    repo.conditional_write_extraction_checkpoint("job-1", "extraction-job-1-002", {})
+    expr = table.update_item.call_args.kwargs["UpdateExpression"]
+    assert "extraction_idempotency_key" in expr
+
+
+def test_extraction_conditional_write_reraises_other_errors():
+    repo, table = _make_repo()
+    table.update_item.side_effect = ClientError(
+        {"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "throttled"}},
+        "UpdateItem",
+    )
+    with pytest.raises(ClientError):
+        repo.conditional_write_extraction_checkpoint("job-1", "extraction-job-1-001", {})

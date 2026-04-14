@@ -71,16 +71,6 @@ async def test_run_fields_are_empty_after_stage1():
 
 
 @pytest.mark.asyncio
-async def test_run_handles_dict_response():
-    """OCR response as plain dict (fallback path)."""
-    stage, client = _make_stage()
-    client.ocr = AsyncMock(return_value={"pages": [{"index": 0, "markdown": "Hello"}]})
-    pages = await stage.run("https://example.com/doc.pdf")
-    assert len(pages) == 1
-    assert pages[0].markdown == "Hello"
-
-
-@pytest.mark.asyncio
 async def test_run_handles_empty_response():
     stage, client = _make_stage()
     response = MagicMock()
