@@ -48,7 +48,9 @@ class CheckpointManager:
         self, job_id: str, pages: list[PageResult], payload: JobPayload
     ) -> JobPayload:
         """
-        Persist partially-extracted pages to S3.
+        Persist partially-extracted pages to S3 and record the checkpoint in DynamoDB.
+        Uses a per-continuation idempotency key so that duplicate Lambda invocations
+        at the same continuation_count cannot save the checkpoint twice.
         Returns an updated JobPayload with extraction_checkpoint_key set and continuation_count incremented.
         """
         log = get_logger(__name__, job_id=job_id)
@@ -56,9 +58,17 @@ class CheckpointManager:
 
         self._store.put_pages(key, pages)
 
+        # Zero-pad continuation_count so lexicographic comparison is correct
+        idempotency_key = f"extraction-{job_id}-{payload.continuation_count:03d}"
+        written = self._repo.conditional_write_extraction_checkpoint(
+            job_id=job_id,
+            idempotency_key=idempotency_key,
+            checkpoint_data={"stage": "extraction", "key": key},
+        )
+
         log.info(
             "checkpoint_saved",
-            extra={"scenario": "extraction", "key": key},
+            extra={"scenario": "extraction", "key": key, "new_write": written},
         )
 
         return dataclasses.replace(

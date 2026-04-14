@@ -29,12 +29,8 @@ class OCRStage:
         raw_pages = response.pages if hasattr(response, "pages") else response.get("pages", [])
 
         for page in raw_pages:
-            if hasattr(page, "markdown"):
-                page_num = page.index + 1
-                markdown = page.markdown or ""
-            else:
-                page_num = page.get("index", 0) + 1
-                markdown = page.get("markdown") or ""
+            page_num = getattr(page, "index", 0) + 1
+            markdown = getattr(page, "markdown", None) or ""
 
             tables = parse_tables(markdown)
             pages.append(PageResult(
