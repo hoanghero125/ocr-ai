@@ -1,5 +1,7 @@
 """API Gateway handler — POST /process, GET /jobs/{id}, GET /health, GET /docs."""
 
+import asyncio
+import dataclasses
 import json
 import uuid
 
@@ -66,8 +68,6 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
 
 
 async def _handle_process(event: dict, container: object) -> dict:
-    import asyncio
-
     raw_body = event.get("body") or "{}"
     try:
         body_dict = json.loads(raw_body)
@@ -77,6 +77,8 @@ async def _handle_process(event: dict, container: object) -> dict:
 
     try:
         await validate_url(request.pdf_url)
+        if request.callback_url:
+            await validate_url(request.callback_url)
     except (SSRFBlockedError, OCRValidationError) as exc:
         return _response(400, {"error": str(exc)})
 
@@ -100,15 +102,13 @@ async def _handle_process(event: dict, container: object) -> dict:
         metadata=request.metadata,
     )
 
-    import dataclasses
     repo = container.get_repo()
     repo.create(job_id, dataclasses.asdict(payload))
 
     sqs = boto3.client("sqs", region_name=container.settings.aws.region)
-    import json as _json
     sqs.send_message(
         QueueUrl=container.settings.aws.sqs_queue_url,
-        MessageBody=_json.dumps(dataclasses.asdict(payload)),
+        MessageBody=json.dumps(dataclasses.asdict(payload)),
     )
 
     base_url = container.settings.aws.http_api_base_url.rstrip("/")

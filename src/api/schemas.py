@@ -11,6 +11,8 @@ _MAX_FIELD_INSTRUCTIONS = 50
 _MAX_KEY_LEN = 50
 _MAX_LABEL_LEN = 200
 _MAX_DESCRIPTION_LEN = 500
+_MAX_METADATA_KEYS = 20
+_MAX_METADATA_VALUE_LEN = 500
 
 
 class FieldInstructionSchema(BaseModel):
@@ -72,6 +74,25 @@ class ProcessRequest(BaseModel):
     def pdf_url_must_be_http(cls, v: str) -> str:
         if not v.startswith(("http://", "https://")):
             raise ValueError("pdf_url must be an http or https URL")
+        return v
+
+    @field_validator("callback_url")
+    @classmethod
+    def callback_url_must_be_https(cls, v: str | None) -> str | None:
+        if v is not None and not v.startswith("https://"):
+            raise ValueError("callback_url must be an https URL")
+        return v
+
+    @field_validator("metadata")
+    @classmethod
+    def metadata_size_limit(cls, v: dict[str, Any]) -> dict[str, Any]:
+        if len(v) > _MAX_METADATA_KEYS:
+            raise ValueError(f"metadata may not exceed {_MAX_METADATA_KEYS} keys")
+        for key, val in v.items():
+            if isinstance(val, str) and len(val) > _MAX_METADATA_VALUE_LEN:
+                raise ValueError(
+                    f"metadata value for '{key}' must not exceed {_MAX_METADATA_VALUE_LEN} characters"
+                )
         return v
 
     @model_validator(mode="after")
