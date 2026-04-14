@@ -106,6 +106,46 @@ def test_pdf_url_rejects_ftp():
         ProcessRequest(pdf_url="ftp://example.com/doc.pdf")
 
 
+# ── ProcessRequest — callback_url ────────────────────────────────────────────
+
+def test_callback_url_https_valid():
+    r = ProcessRequest(pdf_url="https://example.com/doc.pdf", callback_url="https://hook.example.com/cb")
+    assert r.callback_url == "https://hook.example.com/cb"
+
+
+def test_callback_url_none_is_allowed():
+    r = ProcessRequest(pdf_url="https://example.com/doc.pdf", callback_url=None)
+    assert r.callback_url is None
+
+
+def test_callback_url_rejects_http():
+    with pytest.raises(ValidationError, match="https"):
+        ProcessRequest(pdf_url="https://example.com/doc.pdf", callback_url="http://hook.example.com/cb")
+
+
+def test_callback_url_rejects_ftp():
+    with pytest.raises(ValidationError, match="https"):
+        ProcessRequest(pdf_url="https://example.com/doc.pdf", callback_url="ftp://hook.example.com/cb")
+
+
+# ── ProcessRequest — metadata ─────────────────────────────────────────────────
+
+def test_metadata_valid():
+    r = ProcessRequest(pdf_url="https://example.com/doc.pdf", metadata={"ref": "abc123"})
+    assert r.metadata["ref"] == "abc123"
+
+
+def test_metadata_rejects_too_many_keys():
+    meta = {f"k{i}": "v" for i in range(21)}
+    with pytest.raises(ValidationError, match="20"):
+        ProcessRequest(pdf_url="https://example.com/doc.pdf", metadata=meta)
+
+
+def test_metadata_rejects_long_value():
+    with pytest.raises(ValidationError, match="500"):
+        ProcessRequest(pdf_url="https://example.com/doc.pdf", metadata={"ref": "x" * 501})
+
+
 # ── ProcessRequest — field_instructions limit ─────────────────────────────────
 
 def test_field_instructions_limit_enforced():

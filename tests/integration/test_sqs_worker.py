@@ -80,6 +80,37 @@ def test_other_messages_still_processed_after_one_failure():
     assert call_count == 3  # all three records were attempted
 
 
+def test_missing_body_is_reported_as_failure():
+    """A record with no 'body' key must not raise — it should be a batch failure."""
+    processor = MagicMock()
+    processor.process = AsyncMock()
+    container = _make_container(processor)
+
+    event = {"Records": [{"messageId": "msg-nobody"}]}  # no 'body' key
+    result = handle_sqs_batch(event, context=MagicMock(), container=container)
+
+    assert result == {"batchItemFailures": [{"itemIdentifier": "msg-nobody"}]}
+    processor.process.assert_not_called()
+
+
+def test_continuation_count_clamped_to_max():
+    """continuation_count from a corrupt/replayed message must be clamped."""
+    processor = MagicMock()
+    processor.process = AsyncMock()
+    container = _make_container(processor)
+
+    payload_dict = {
+        "job_id": "job-clamp",
+        "pdf_url": "https://example.com/doc.pdf",
+        "continuation_count": 9999,
+    }
+    record = {"messageId": "msg-clamp", "body": json.dumps(payload_dict)}
+    handle_sqs_batch({"Records": [record]}, context=MagicMock(), container=container)
+
+    called_payload: JobPayload = processor.process.call_args.args[0]
+    assert called_payload.continuation_count <= 100
+
+
 def test_direct_invocation_continuation_routed_correctly():
     processor = MagicMock()
     processor.process = AsyncMock()

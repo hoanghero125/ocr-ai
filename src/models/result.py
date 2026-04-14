@@ -3,14 +3,14 @@
 from dataclasses import dataclass, field
 
 
-@dataclass
+@dataclass(frozen=True)
 class ExtractedTable:
     headers: list[str]
     rows: list[list[str]]
     raw: str  # original markdown/HTML for debugging
 
 
-@dataclass
+@dataclass(frozen=True)
 class ExtractedField:
     key: str
     label: str
@@ -18,7 +18,7 @@ class ExtractedField:
     confidence: float  # 0.0–1.0
 
 
-@dataclass
+@dataclass(frozen=True)
 class PageResult:
     page_number: int
     markdown: str  # raw OCR output from Mistral
@@ -27,14 +27,14 @@ class PageResult:
     error: str | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class JobProgress:
     total_pages: int
     processed_pages: int
     current_step: str
 
 
-@dataclass
+@dataclass(frozen=True)
 class OCRResult:
     job_id: str
     status: str  # matches JobStatus values

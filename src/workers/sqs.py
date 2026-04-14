@@ -8,6 +8,7 @@ from src.models.job import FieldInstruction, JobPayload
 from src.shared.logging import get_logger
 
 _logger = get_logger(__name__)
+_MAX_CONTINUATION_COUNT = 100  # hard ceiling — guards against corrupt/replayed messages
 
 
 def _payload_from_dict(d: dict) -> JobPayload:
@@ -20,6 +21,9 @@ def _payload_from_dict(d: dict) -> JobPayload:
         )
         for fi in d.get("field_instructions") or []
     )
+    raw_count = d.get("continuation_count", 0)
+    continuation_count = max(0, min(int(raw_count), _MAX_CONTINUATION_COUNT))
+
     return JobPayload(
         job_id=d["job_id"],
         pdf_url=d["pdf_url"],
@@ -27,7 +31,7 @@ def _payload_from_dict(d: dict) -> JobPayload:
         field_instructions=field_instructions,
         options=d.get("options") or {},
         metadata=d.get("metadata") or {},
-        continuation_count=d.get("continuation_count", 0),
+        continuation_count=continuation_count,
         ocr_checkpoint_key=d.get("ocr_checkpoint_key"),
         extraction_checkpoint_key=d.get("extraction_checkpoint_key"),
     )
@@ -44,7 +48,10 @@ def handle_sqs_batch(event: dict, context: object, container: object) -> dict:
     for record in records:
         message_id = record.get("messageId", "unknown")
         try:
-            body = json.loads(record["body"])
+            raw_body = record.get("body")
+            if not raw_body:
+                raise ValueError("SQS record missing 'body'")
+            body = json.loads(raw_body)
             payload = _payload_from_dict(body)
             processor = container.get_processor()
             asyncio.run(processor.process(payload, context=context))

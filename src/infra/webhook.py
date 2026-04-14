@@ -38,7 +38,7 @@ class WebhookClient:
                     # Permanent client-side failure — do not retry
                     log.warning(
                         "webhook_failed_4xx",
-                        extra={"status_code": response.status_code, "callback_url": callback_url},
+                        extra={"status_code": response.status_code},
                     )
                     return
 
@@ -63,5 +63,5 @@ class WebhookClient:
 
         log.warning(
             "webhook_failed",
-            extra={"attempts": self._max_retries, "callback_url": callback_url},
+            extra={"attempts": self._max_retries},
         )

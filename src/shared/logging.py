@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 _REDACTED = "***REDACTED***"
-_SENSITIVE_KEYS = {"api_key", "password", "token", "authorization"}
+_SENSITIVE_KEYS = {"api_key", "password", "token", "authorization", "callback_url"}
 _PDF_URL_KEY = "pdf_url"
 
 
