@@ -6,8 +6,7 @@ import time
 from typing import Any
 
 import httpx
-from mistralai import Mistral
-from mistralai.models import SDKError
+from mistralai.client import Mistral
 
 from src.infra.rate_limiter import MistralRateLimiter
 from src.shared.exceptions import MistralAPIError
@@ -100,8 +99,8 @@ class MistralClient:
         for attempt in range(1, self._max_retries + 1):
             try:
                 return await asyncio.to_thread(fn)
-            except SDKError as exc:
-                status = exc.status_code if hasattr(exc, "status_code") else 0
+            except Exception as exc:
+                status = getattr(exc, "status_code", 0) or 0
                 retryable = status == 429 or status >= 500
                 last_exc = MistralAPIError(str(exc), status_code=status)
 
