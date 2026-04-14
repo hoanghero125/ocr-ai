@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import asyncio
+import base64
 import dataclasses
 import json
 import os
@@ -19,8 +20,13 @@ import time
 import uuid
 from pathlib import Path
 
+# ── Ensure project root is on sys.path ────────────────────────────────────────
+PROJECT_ROOT = Path(__file__).parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 # ── Load .env before anything else imports os.environ ─────────────────────────
-env_path = Path(__file__).parent.parent / ".env"
+env_path = PROJECT_ROOT / ".env"
 if env_path.exists():
     from dotenv import load_dotenv
     load_dotenv(env_path)
@@ -83,17 +89,35 @@ def _print_result(job_id: str, table_name: str) -> None:
         result = json.loads(body)
         print("\nPages extracted:")
         for page in result.get("pages", []):
-            print(f"\n  -- Page {page['page_number']} --")
-            if page.get("fields"):
-                for field in page["fields"]:
-                    print(f"     {field['key']}: {field['value']}  (confidence: {field['confidence']:.2f})")
-            if page.get("tables"):
-                print(f"     Tables: {len(page['tables'])}")
+            print(f"\n{'─' * 60}")
+            print(f"  Page {page['page_number']}")
+            print(f"{'─' * 60}")
             if page.get("error"):
-                print(f"     Error: {page['error']}")
+                print(f"  ERROR: {page['error']}")
+            if page.get("markdown"):
+                print(page["markdown"])
+            if page.get("tables"):
+                print(f"\n  [{len(page['tables'])} table(s) parsed]")
+            if page.get("fields"):
+                print("\n  Extracted fields:")
+                for field in page["fields"]:
+                    print(f"    {field['key']}: {field['value']}  (confidence: {field['confidence']:.2f})")
+
+
+def _local_path_to_data_uri(path: str) -> str:
+    """Convert a local file path to a base64 data URI."""
+    data = Path(path).read_bytes()
+    b64 = base64.b64encode(data).decode()
+    return f"data:application/pdf;base64,{b64}"
 
 
 async def run(pdf_url: str, field_keys: list[str]) -> None:
+    # Support local file paths
+    if not pdf_url.startswith(("http://", "https://", "data:")):
+        print(f"[local] Reading local file: {pdf_url}")
+        pdf_url = _local_path_to_data_uri(pdf_url)
+        print(f"[local] Converted to data URI ({len(pdf_url)} bytes)")
+
     from src.shared.config import get_settings
     # Clear lru_cache so settings re-read with new env vars
     get_settings.cache_clear()
@@ -115,38 +139,14 @@ async def run(pdf_url: str, field_keys: list[str]) -> None:
             "description": f"Extract the {key} field",
         })
 
-    # Simulate API handler
-    from src.api.routes import handle_api_event
-
-    # Patch SQS send so it doesn't fail (we invoke worker directly)
-    import unittest.mock as mock
-    mock_sqs = mock.MagicMock()
-    mock_sqs.send_message = mock.MagicMock()
-
-    event = {
-        "httpMethod": "POST",
-        "path": "/process",
-        "body": json.dumps({
-            "pdf_url": pdf_url,
-            "field_instructions": field_instructions,
-        }),
-    }
-
     container = get_container()
 
-    with mock.patch("boto3.client", return_value=mock_sqs):
-        response = await handle_api_event(event, context=None, container=container)
-
-    if response["statusCode"] != 202:
-        print(f"[local] API error: {response['body']}")
-        return
-
-    body = json.loads(response["body"])
-    job_id = body["job_id"]
-    print(f"[local] Job created: {job_id}")
-
-    # Directly invoke worker (skip SQS polling)
+    # Build JobPayload directly (skip API route + URL validation for local files)
+    import dataclasses as _dc
     from src.models.job import FieldInstruction, JobPayload
+    from src.infra.repository import JobRepository
+
+    job_id = str(uuid.uuid4())
     payload = JobPayload(
         job_id=job_id,
         pdf_url=pdf_url,
@@ -159,6 +159,14 @@ async def run(pdf_url: str, field_keys: list[str]) -> None:
             for fi in field_instructions
         ),
     )
+
+    repo = container.get_repo()
+    # Store a placeholder pdf_url in DynamoDB — data URIs exceed the 400KB item limit
+    db_record = _dc.asdict(payload)
+    if pdf_url.startswith("data:"):
+        db_record["pdf_url"] = "data:local-file"
+    repo.create(job_id, db_record)
+    print(f"[local] Job created: {job_id}")
 
     print(f"[local] Processing job (calling Mistral OCR)...")
     t0 = time.monotonic()
