@@ -1,0 +1,16 @@
+.env
+.env.*
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.coverage
+htmlcov
+tests
+docs
+scripts
+terraform
+requirements-dev.txt
