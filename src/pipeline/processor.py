@@ -93,8 +93,8 @@ class OCRProcessor:
                         payload.extraction_checkpoint_key
                     )
                     # Only re-extract pages that have no fields yet
-                    pending = [p for p in start_pages if not p.fields and not p.error]
-                    done = [p for p in start_pages if p.fields or p.error]
+                    pending = [p for p in start_pages if not p.extracted_fields and not p.error_message]
+                    done = [p for p in start_pages if p.extracted_fields or p.error_message]
                 else:
                     pending = pages
                     done = []
@@ -104,7 +104,7 @@ class OCRProcessor:
                 def on_page_done(page_num: int, _total: int) -> None:
                     processed = len(done) + sum(
                         1 for p in start_pages
-                        if p.page_number == page_num or p.fields or p.error
+                        if p.page_number == page_num or p.extracted_fields or p.error_message
                     )
                     self._repo.update_progress(
                         job_id,
@@ -136,9 +136,15 @@ class OCRProcessor:
                     return
 
             # ── FINALIZE ───────────────────────────────────────────────
-            errors = [p.error for p in pages if p.error]
+            errors = [p.error_message for p in pages if p.error_message]
             status = (
                 JobStatus.COMPLETED_WITH_ERRORS if errors else JobStatus.COMPLETED
+            )
+
+            page_confidences = [p.confidence for p in pages if p.confidence > 0]
+            overall_confidence = (
+                round(sum(page_confidences) / len(page_confidences), 3)
+                if page_confidences else 0.0
             )
 
             result = OCRResult(
@@ -149,6 +155,7 @@ class OCRProcessor:
                 processed_pages=len(pages),
                 errors=[e for e in errors if e],
                 metadata=payload.metadata,
+                confidence=overall_confidence,
             )
 
             result_url = self._store.put_result(job_id, result)

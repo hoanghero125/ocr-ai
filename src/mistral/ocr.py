@@ -37,8 +37,6 @@ class OCRStage:
                 page_number=page_num,
                 markdown=markdown,
                 tables=tables,
-                fields=[],
-                error=None,
             ))
 
         duration_ms = int((time.monotonic() - t0) * 1000)

@@ -20,11 +20,17 @@ class MistralSettings:
 class AWSSettings:
     region: str
     dynamodb_table: str
-    s3_results_bucket: str
     sqs_queue_url: str
-    results_base_url: str
     http_api_base_url: str
     environment: str
+
+
+@dataclass(frozen=True)
+class MinioSettings:
+    url: str
+    access_key: str
+    secret_key: str
+    bucket: str
 
 
 @dataclass(frozen=True)
@@ -51,6 +57,7 @@ class ProcessingSettings:
 class Settings:
     mistral: MistralSettings
     aws: AWSSettings
+    minio: MinioSettings
     rate_limit: RateLimitSettings
     processing: ProcessingSettings
 
@@ -68,13 +75,17 @@ def get_settings() -> Settings:
             max_retries=int(os.environ.get("MISTRAL_MAX_RETRIES", "4")),
         ),
         aws=AWSSettings(
-            region=os.environ.get("AWS_REGION", "us-east-1"),
-            dynamodb_table=os.environ["DYNAMODB_TABLE"],
-            s3_results_bucket=os.environ["S3_BUCKET"],
+            region=os.environ.get("AWS_REGION", "ap-southeast-1"),
+            dynamodb_table=os.environ.get("DYNAMODB_TABLE", "ocr_jobs"),
             sqs_queue_url=os.environ.get("OCR_JOB_QUEUE_URL", ""),
-            results_base_url=os.environ.get("RESULTS_BASE_URL", ""),
             http_api_base_url=os.environ.get("HTTP_API_BASE_URL", ""),
             environment=os.environ.get("ENVIRONMENT", "local"),
+        ),
+        minio=MinioSettings(
+            url=os.environ.get("MINIO_URL", "https://minioapi.digeni.vn"),
+            access_key=os.environ.get("MINIO_ACCESS_KEY", "admin"),
+            secret_key=os.environ.get("MINIO_SECRET_KEY", "password123"),
+            bucket=os.environ.get("MINIO_BUCKET", "mistral-ai"),
         ),
         rate_limit=RateLimitSettings(
             mistral_rps=int(os.environ.get("MISTRAL_RPS", "6")),

@@ -79,8 +79,19 @@ def _build_processor(settings: Settings, repo: JobRepository) -> OCRProcessor:
         rate_limiter=rate_limiter,
     )
 
-    s3_client = boto3.client("s3", region_name=settings.aws.region)
-    store = ResultStore(s3_client=s3_client, bucket=settings.aws.s3_results_bucket)
+    minio = settings.minio
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=minio.url,
+        aws_access_key_id=minio.access_key,
+        aws_secret_access_key=minio.secret_key,
+        region_name="us-east-1",  # MinIO ignores this but boto3 requires a value
+    )
+    store = ResultStore(
+        s3_client=s3_client,
+        bucket=minio.bucket,
+        base_url=f"{minio.url.rstrip('/')}/{minio.bucket}",
+    )
 
     checkpoint_manager = CheckpointManager(store=store, repo=repo)
 
