@@ -2,48 +2,50 @@
 
 PDF OCR and structured field extraction service built on Mistral AI. Accepts a PDF URL, runs multi-page OCR, and optionally extracts structured fields — deployed as two AWS Lambda functions behind API Gateway, with SQS for async job queuing.
 
+**API docs:** https://ocr-ai.digeni.vn/docs
+
 ## Architecture
 
 ```
 Client
   │
   ▼
-API Gateway (HTTP API)
+API Gateway (HTTP API) — https://ocr-ai.digeni.vn
   │
   ▼
 API Lambda  ──►  DynamoDB (job state)
-  │                  │
-  ▼                  │
-SQS Queue            │
-  │                  │
-  ▼                  │
-Worker Lambda ◄──────┘
   │
-  ├──► Mistral OCR API  (page → markdown)
+  ▼
+SQS Queue
+  │
+  ▼
+Worker Lambda
+  │
+  ├──► Mistral OCR API  (PDF → markdown per page)
   ├──► Mistral Chat API (markdown → structured fields)
-  ├──► S3 (checkpoints + final result JSON)
-  └──► Webhook (optional callback_url notification)
+  ├──► MinIO            (checkpoints + final result JSON)
+  └──► Webhook          (optional callback_url notification)
 ```
 
 Both Lambda functions share a single ECR Docker image, differentiated by `image_config.command`:
 - **API** → `src.lambda_handler.api_gateway_handler` (60s timeout, 512 MB)
 - **Worker** → `src.lambda_handler.worker_handler` (900s timeout, 2048 MB)
 
-For jobs that exceed the 15-minute Lambda limit, the worker self-invokes with a continuation payload and S3 checkpoints, picking up exactly where it left off.
+For jobs that exceed the 15-minute Lambda limit, the worker self-invokes with a continuation payload and MinIO checkpoints, picking up exactly where it left off.
 
 ## Local Development
 
-No AWS required. The local server wires Mistral directly to FastAPI — no SQS, no DynamoDB, no S3.
+The local dev server uses real infrastructure — DynamoDB, MinIO, and Mistral — with SQS replaced by inline background processing.
 
 ### Setup
 
 ```bash
-# 1. Install dev dependencies
-pip install -r requirements-dev.txt
+# 1. Install dependencies
+pip install -r requirements.txt
 
-# 2. Copy and configure env
+# 2. Copy and fill in credentials
 cp .env.example .env
-# Set MISTRAL_API_KEY in .env
+# Edit .env — set MISTRAL_API_KEY, AWS credentials, MinIO credentials
 
 # 3. Start the server
 python scripts/local_server.py
@@ -51,32 +53,15 @@ python scripts/local_server.py
 
 Open **http://localhost:8000/docs** for the interactive Swagger UI.
 
-### Endpoints
+### Endpoints (local + production)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/ocr` | Upload a PDF, get raw markdown per page |
-| `POST` | `/extract` | Upload a PDF + field definitions, get structured values per page |
+| `POST` | `/process` | Submit a PDF for async processing — returns `job_id` immediately |
+| `GET` | `/jobs/{job_id}` | Poll job status and get `result_url` when done |
+| `POST` | `/extract` | Synchronous OCR + extraction — returns raw data immediately (no queue) |
 | `GET` | `/health` | Health check |
-
-#### `/extract` — field definitions format
-
-Pass `fields` as a JSON array in the form body:
-
-```json
-[
-  { "key": "ho_ten",     "label": "Ho va ten" },
-  { "key": "ngay_sinh",  "label": "Ngay sinh" },
-  { "key": "dia_chi",    "label": "Dia chi thuong tru" },
-  { "key": "so_cmnd",    "label": "So CMND / CCCD", "min_confidence": 0.8 }
-]
-```
-
-Each field:
-- `key` — alphanumeric + underscores, max 50 chars
-- `label` — human-readable name shown to the model, max 200 chars
-- `description` _(optional)_ — extra context for the model, max 500 chars
-- `min_confidence` _(optional)_ — threshold 0.0–1.0; values below this are returned as `null`
+| `GET` | `/docs` | Swagger UI |
 
 ## Production API
 
@@ -92,9 +77,18 @@ Content-Type: application/json
   "pdf_url": "https://example.com/document.pdf",
   "callback_url": "https://your-app.com/webhook",
   "field_instructions": [
-    { "key": "ho_ten", "label": "Ho va ten" }
+    { "key": "ho_ten",    "label": "Ho va ten" },
+    { "key": "ngay_sinh", "label": "Ngay sinh", "min_confidence": 0.8 },
+    { "key": "so_cmnd",   "label": "So CMND / CCCD", "description": "Trich xuat so CMND hoac CCCD" }
   ],
-  "metadata": { "ref": "invoice-123" }
+  "options": {
+    "language_hints": ["vi", "en"]
+  },
+  "metadata": {
+    "client_id": "ocr-core-backend",
+    "document_id": "2303",
+    "extra": { "file_id": 4102 }
+  }
 }
 ```
 
@@ -103,9 +97,17 @@ Response `202`:
 {
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "queued",
-  "status_url": "https://api.example.com/jobs/550e8400-..."
+  "status_url": "https://ocr-ai.digeni.vn/jobs/550e8400-...",
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "message": "Job queued successfully"
 }
 ```
+
+**Field instruction fields:**
+- `key` — alphanumeric + underscores, max 50 chars (must be unique per request)
+- `label` — human-readable name shown to the model, max 200 chars
+- `description` _(optional)_ — extra context for the model, max 500 chars
+- `min_confidence` _(optional)_ — threshold 0.0–1.0; extracted values below this are returned as `null`
 
 ### Poll job status
 
@@ -117,41 +119,84 @@ GET /jobs/{job_id}
 {
   "job_id": "550e8400-...",
   "status": "completed",
-  "result_url": "https://bucket.s3.amazonaws.com/results/...",
-  "progress": { "total_pages": 10, "processed_pages": 10, "current_step": "done" },
+  "result_url": "https://minioapi.digeni.vn/mistral-ai/results/550e8400-.../result.json",
+  "progress": { "total_pages": 3, "processed_pages": 3, "current_step": "Processing complete" },
+  "error": null,
   "created_at": "2025-01-01T00:00:00+00:00",
   "updated_at": "2025-01-01T00:01:30+00:00"
 }
 ```
 
-**Job statuses:** `queued` → `processing` → `completed` / `failed`
+**Job statuses:** `queued` → `processing` → `completed` / `completed_with_errors` / `failed`
 
 ### Webhook payload (on completion)
 
-If `callback_url` was provided, the worker POSTs this to it:
+If `callback_url` was provided, the worker POSTs this to it when the job reaches a terminal state:
 
 ```json
 {
   "job_id": "550e8400-...",
   "status": "completed",
-  "result_url": "https://...",
-  "total_pages": 10
+  "result_url": "https://minioapi.digeni.vn/mistral-ai/results/550e8400-.../result.json",
+  "errors": [],
+  "metadata": { "client_id": "ocr-core-backend", "document_id": "2303" }
 }
 ```
 
 Retries 3× with exponential backoff on 5xx. Permanent failure on 4xx. `callback_url` must be `https://`.
+
+### Result JSON structure
+
+The object at `result_url` (and the response from `POST /extract`) follows this shape:
+
+```json
+{
+  "job_id": "...",
+  "status": "completed",
+  "total_pages": 3,
+  "confidence": 0.933,
+  "pages": [
+    {
+      "page_number": 1,
+      "handwritten_percentage": 5,
+      "extracted_fields": [
+        { "key": "ho_ten", "label": "Ho va ten", "value": "Nguyen Van A", "confidence": 0.95, "field_type": "typed" }
+      ],
+      "auto_fields": [
+        { "key": "quoc_hieu", "label": "Quoc hieu", "value": "CONG HOA XA HOI CHU NGHIA VIET NAM", "confidence": 0.95, "field_type": "typed" }
+      ],
+      "tables": [
+        { "headers": ["Col A", "Col B"], "rows": [["val1", "val2"]] }
+      ],
+      "free_texts": [
+        { "content": "Paragraph text...", "confidence": 0.9, "field_type": "typed", "position": "body" }
+      ],
+      "confidence": 0.93,
+      "status": "success",
+      "error_message": null,
+      "error_step": null
+    }
+  ]
+}
+```
+
+- `extracted_fields` — fields from your `field_instructions` (one entry per field, `value: null` if below `min_confidence`)
+- `auto_fields` — other important fields detected automatically
+- `free_texts` — narrative paragraphs/notes; `position`: `header` | `body` | `footer` | `signature`
+- `field_type`: `"typed"` (printed/stamped) or `"handwritten"`
 
 ## Infrastructure (Terraform)
 
 ```bash
 cd terraform
 
-# First deploy — build and push the Docker image first
 terraform init
 terraform apply \
   -var="environment=staging" \
   -var="mistral_api_key=sk-..." \
-  -var="ecr_image_uri=123456789.dkr.ecr.us-east-1.amazonaws.com/bizgenie-ocr:latest"
+  -var="ecr_image_uri=123456789.dkr.ecr.ap-southeast-1.amazonaws.com/bizgenie-ocr:latest" \
+  -var="minio_access_key=..." \
+  -var="minio_secret_key=..."
 ```
 
 ### Variables
@@ -159,18 +204,21 @@ terraform apply \
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `environment` | yes | — | `staging` or `production` |
-| `mistral_api_key` | yes | — | Mistral API key (stored as Lambda env var) |
-| `ecr_image_uri` | yes | — | ECR image URI pushed before `terraform apply` |
+| `mistral_api_key` | yes | — | Mistral API key |
+| `ecr_image_uri` | yes | — | ECR image URI |
+| `minio_access_key` | yes | — | MinIO access key |
+| `minio_secret_key` | yes | — | MinIO secret key |
 | `aws_region` | no | `us-east-1` | AWS region |
-| `results_base_url` | no | `""` | CloudFront domain for result file URLs |
+| `minio_url` | no | `https://minioapi.digeni.vn` | MinIO endpoint URL |
+| `minio_bucket` | no | `mistral-ai` | MinIO bucket for results and checkpoints |
+| `http_api_base_url` | no | `https://ocr-ai.digeni.vn` | Public API URL (used in `status_url` responses) |
 
 ### AWS resources created
 
-- **API Gateway** — HTTP API with throttling (50 RPS / 100 burst), access logs
+- **API Gateway** — HTTP API with CORS, throttling (50 RPS / 100 burst), access logs
 - **Lambda** — API (60s) and Worker (900s) functions from shared ECR image
 - **SQS** — main queue + dead-letter queue (after 3 receive attempts)
-- **DynamoDB** — jobs table (24h TTL) + rate-limiter table
-- **S3** — results bucket (checkpoints 7d TTL, results 90d TTL) + access-logs bucket
+- **DynamoDB** — jobs table (TTL) + rate-limiter table
 - **CloudWatch** — log groups for API Gateway and both Lambda functions (30d retention)
 - **IAM** — least-privilege roles per function
 
@@ -178,13 +226,13 @@ terraform apply \
 
 ```bash
 # Authenticate
-aws ecr get-login-password --region us-east-1 | \
-  docker login --username AWS --password-stdin 123456789.dkr.ecr.us-east-1.amazonaws.com
+aws ecr get-login-password --region ap-southeast-1 | \
+  docker login --username AWS --password-stdin 123456789.dkr.ecr.ap-southeast-1.amazonaws.com
 
 # Build and push
 docker build -t bizgenie-ocr:latest .
-docker tag bizgenie-ocr:latest 123456789.dkr.ecr.us-east-1.amazonaws.com/bizgenie-ocr:latest
-docker push 123456789.dkr.ecr.us-east-1.amazonaws.com/bizgenie-ocr:latest
+docker tag bizgenie-ocr:latest 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/bizgenie-ocr:latest
+docker push 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/bizgenie-ocr:latest
 ```
 
 ## Configuration
@@ -197,7 +245,7 @@ All settings are read from environment variables (see `.env.example`):
 | `MISTRAL_OCR_MODEL` | `mistral-ocr-latest` | OCR model |
 | `MISTRAL_CHAT_MODEL` | `mistral-small-latest` | Extraction model |
 | `MISTRAL_TABLE_FORMAT` | `html` | Table output format (`html` or `markdown`) |
-| `MISTRAL_TIMEOUT_S` | `120` | Per-request timeout |
+| `MISTRAL_TIMEOUT_S` | `120` | Per-request timeout (seconds) |
 | `MISTRAL_MAX_RETRIES` | `4` | Retry attempts on transient errors |
 | `MAX_CONCURRENT_PAGES` | `4` | Parallel extraction semaphore |
 | `EXTRACT_MAX_RETRIES_PER_PAGE` | `2` | Per-page extraction retries |
@@ -205,16 +253,15 @@ All settings are read from environment variables (see `.env.example`):
 | `LAMBDA_EXTRACT_CONTINUATION_ENABLED` | `false` | Enable timeout-based continuation |
 | `WEBHOOK_TIMEOUT_S` | `10` | Webhook HTTP timeout |
 | `WEBHOOK_MAX_RETRIES` | `3` | Webhook retry attempts |
-| `MISTRAL_RATE_LIMIT_TABLE` | `""` | DynamoDB table name for rate limiting (empty = disabled) |
+| `HTTP_API_BASE_URL` | `https://ocr-ai.digeni.vn` | Public API base URL |
+| `WORKER_FUNCTION_NAME` | `""` | Worker Lambda name for self-invocation |
+| `MISTRAL_RATE_LIMIT_TABLE` | `""` | DynamoDB table for rate limiting (empty = disabled) |
 
 ## Testing
 
 ```bash
-# Run all tests with coverage
 python -m pytest tests/ --cov=src --cov-report=term-missing -q
 ```
-
-**166 tests, 96% coverage.**
 
 Test layout:
 - `tests/unit/` — pure unit tests, no AWS, all dependencies mocked
@@ -225,18 +272,18 @@ Test layout:
 ```
 src/
 ├── api/
-│   ├── routes.py          # API Gateway event router
+│   ├── routes.py          # API Gateway event router + OpenAPI spec builder
 │   └── schemas.py         # Pydantic request/response validation
 ├── checkpoint/
-│   └── manager.py         # S3 checkpoint save/load with idempotent DynamoDB writes
+│   └── manager.py         # MinIO checkpoint save/load with idempotent DynamoDB writes
 ├── infra/
 │   ├── rate_limiter.py    # DynamoDB-backed Mistral rate limiter
 │   ├── repository.py      # DynamoDB job CRUD
-│   ├── store.py           # S3 result/checkpoint storage
+│   ├── store.py           # MinIO result/checkpoint storage
 │   └── webhook.py         # Callback delivery with retry/backoff
 ├── mistral/
 │   ├── client.py          # Mistral SDK wrapper (OCR + chat)
-│   ├── extraction.py      # Stage 2: parallel field extraction
+│   ├── extraction.py      # Stage 2: parallel field extraction per page
 │   ├── ocr.py             # Stage 1: PDF → markdown per page
 │   └── table_parser.py    # Markdown table → structured rows
 ├── models/
@@ -255,14 +302,14 @@ src/
 ├── container.py           # Dependency wiring (singleton components)
 └── lambda_handler.py      # Lambda entry points
 scripts/
-└── local_server.py        # FastAPI dev server (no AWS)
+└── local_server.py        # FastAPI dev server (real DynamoDB + MinIO + Mistral, no SQS)
 terraform/                 # All infrastructure-as-code
 ```
 
 ## Security Notes
 
-- **SSRF protection** — both `pdf_url` and `callback_url` are validated: scheme must be `https` (or `http` for pdf_url), and async DNS resolution blocks private/loopback IP ranges
-- **Input validation** — field keys, labels, descriptions, and metadata values are length-limited and control-character-stripped at the schema layer
-- **Secret redaction** — the structured logger strips `api_key`, `token`, `password`, `authorization`, and `callback_url` from all log output
+- **SSRF protection** — `pdf_url` and `callback_url` are validated: async DNS resolution blocks private/loopback IP ranges (RFC-1918, link-local, AWS IMDS)
+- **Input validation** — field keys, labels, and descriptions are length-limited and control-character-stripped; max 50 field instructions per request; duplicate keys rejected
+- **Secret redaction** — structured logger strips `api_key`, `token`, `password`, `authorization`, and `callback_url` from all log output
 - **Idempotent writes** — DynamoDB conditional expressions prevent duplicate checkpoint writes on replayed SQS messages
-- **Least-privilege IAM** — API and Worker roles have separate, scoped policies; Worker cannot call API Gateway management APIs; API cannot invoke worker-only DynamoDB operations
+- **Least-privilege IAM** — API and Worker roles have separate, scoped policies

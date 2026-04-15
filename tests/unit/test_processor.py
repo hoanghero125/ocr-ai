@@ -8,7 +8,7 @@ import pytest
 from src.models.job import FieldInstruction, JobPayload, JobStatus
 from src.models.result import ExtractedField, JobProgress, OCRResult, PageResult
 from src.pipeline.processor import OCRProcessor
-from src.shared.config import AWSSettings, MistralSettings, ProcessingSettings, RateLimitSettings, Settings
+from src.shared.config import AWSSettings, MinioSettings, MistralSettings, ProcessingSettings, RateLimitSettings, Settings
 from src.shared.exceptions import CheckpointError
 
 
@@ -21,8 +21,11 @@ def _make_settings(continuation_enabled: bool = True) -> Settings:
             table_format="html", base_url="u", timeout_s=10, max_retries=1,
         ),
         aws=AWSSettings(
-            region="us-east-1", dynamodb_table="t", s3_results_bucket="b",
-            sqs_queue_url="q", results_base_url="", http_api_base_url="", environment="local",
+            region="us-east-1", dynamodb_table="t",
+            sqs_queue_url="q", http_api_base_url="", environment="local",
+        ),
+        minio=MinioSettings(
+            url="http://localhost:9000", access_key="test", secret_key="test", bucket="test-bucket",
         ),
         rate_limit=RateLimitSettings(
             mistral_rps=6, rate_limit_table="", rate_limit_pk="mistral",
@@ -142,7 +145,7 @@ async def test_timeout_after_ocr_triggers_continuation():
 async def test_page_error_does_not_abort_job():
     error_pages = [
         PageResult(page_number=1, markdown="ok"),
-        PageResult(page_number=2, markdown="fail", error="extraction failed"),
+        PageResult(page_number=2, markdown="fail", error_message="extraction failed"),
     ]
     processor, _, _, _, repo, _ = _make_processor(pages=error_pages)
     payload = _make_payload()
@@ -236,7 +239,7 @@ async def test_extraction_checkpoint_only_reprocesses_pending_pages():
     done_page = PageResult(
         page_number=1,
         markdown="done",
-        fields=[ExtractedField(key="x", label="X", value="y", confidence=1.0)],
+        extracted_fields=[ExtractedField(key="x", label="X", value="y", confidence=1.0)],
     )
     pending_page = PageResult(page_number=2, markdown="pending")
 
@@ -259,7 +262,7 @@ async def test_extraction_checkpoint_only_reprocesses_pending_pages():
     called_pages = extraction_stage.run.call_args.kwargs.get("pages") \
         or extraction_stage.run.call_args.args[0]
     # Only the pending page (no fields, no error) should be sent to extraction
-    assert all(not p.fields and not p.error for p in called_pages)
+    assert all(not p.extracted_fields and not p.error_message for p in called_pages)
 
 
 @pytest.mark.asyncio

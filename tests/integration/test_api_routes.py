@@ -47,11 +47,12 @@ def aws_resources(aws_credentials):
 
 def _make_container(table, queue_url: str) -> MagicMock:
     from src.infra.repository import JobRepository
-    from src.shared.config import AWSSettings, MistralSettings, ProcessingSettings, RateLimitSettings, Settings
+    from src.shared.config import AWSSettings, MinioSettings, MistralSettings, ProcessingSettings, RateLimitSettings, Settings
 
     settings = Settings(
         mistral=MistralSettings("k", "m", "m", "html", "u", 10, 1),
-        aws=AWSSettings("us-east-1", "test-jobs", "test-bucket", queue_url, "", "", "local"),
+        aws=AWSSettings("us-east-1", "test-jobs", queue_url, "", "local"),
+        minio=MinioSettings("http://localhost:9000", "test", "test", "test-bucket"),
         rate_limit=RateLimitSettings(6, "", "mistral", 120, 900),
         processing=ProcessingSettings(4, 120000, False, 2, 10, 3, 5),
     )

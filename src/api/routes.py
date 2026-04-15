@@ -1,10 +1,12 @@
 """API Gateway handler — POST /process, GET /jobs/{id}, GET /health, GET /docs."""
 
 import asyncio
+import copy
 import dataclasses
 import json
 import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 import boto3
 from pydantic import ValidationError
@@ -18,14 +20,174 @@ from src.shared.url_validator import validate_url
 _logger = get_logger(__name__)
 
 _SWAGGER_HTML = """<!DOCTYPE html>
-<html><head><title>OCR AI API</title>
-<meta charset="utf-8"/>
-<link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
-</head><body>
-<div id="swagger-ui"></div>
-<script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
-<script>SwaggerUIBundle({url:"/openapi.json",dom_id:"#swagger-ui"});</script>
-</body></html>"""
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>OCR AI API</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css" />
+  <style>body { margin: 0; }</style>
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.onload = function() {
+      window.ui = SwaggerUIBundle({
+        url: "/openapi.json",
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        presets: [SwaggerUIBundle.presets.apis],
+        layout: "BaseLayout"
+      });
+    };
+  </script>
+</body>
+</html>"""
+
+
+def _rewrite_defs_to_components(obj: Any) -> None:
+    """Rewrite Pydantic v2 #/$defs/X refs to OpenAPI #/components/schemas/X."""
+    if isinstance(obj, dict):
+        ref = obj.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            obj["$ref"] = "#/components/schemas/" + ref[len("#/$defs/"):]
+        for v in obj.values():
+            _rewrite_defs_to_components(v)
+    elif isinstance(obj, list):
+        for item in obj:
+            _rewrite_defs_to_components(item)
+
+
+def _build_openapi_spec() -> dict:
+    schema = copy.deepcopy(ProcessRequest.model_json_schema())
+    defs = schema.pop("$defs", {})
+    root_name = schema.get("title") or "ProcessRequest"
+    components: dict[str, Any] = {name: copy.deepcopy(s) for name, s in defs.items()}
+    components[root_name] = schema
+    _rewrite_defs_to_components(components)
+
+    return {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "OCR AI API",
+            "version": "1.0.0",
+            "description": (
+                "PDF OCR extraction service powered by Mistral.\n\n"
+                "Submit a PDF with `POST /process` — returns a `job_id` immediately. "
+                "Poll `GET /jobs/{job_id}` (or use the `status_url` from the response) "
+                "until status is terminal (`completed`, `completed_with_errors`, `failed`). "
+                "Optionally provide a `callback_url` to receive one webhook POST when the job finishes."
+            ),
+        },
+        "components": {"schemas": components},
+        "paths": {
+            "/process": {
+                "post": {
+                    "summary": "Submit a PDF for OCR processing",
+                    "operationId": "queueOcr",
+                    "description": (
+                        "Returns **202** immediately. Processing runs asynchronously. "
+                        "Use `status_url` or `GET /jobs/{job_id}` to poll for results."
+                    ),
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {"$ref": f"#/components/schemas/{root_name}"}
+                            }
+                        },
+                    },
+                    "responses": {
+                        "202": {
+                            "description": "Job accepted",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "job_id": {"type": "string", "format": "uuid"},
+                                            "status": {"type": "string", "example": "queued"},
+                                            "status_url": {"type": "string"},
+                                            "created_at": {"type": "string", "format": "date-time"},
+                                            "message": {"type": "string"},
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "400": {"description": "Validation error"},
+                    },
+                }
+            },
+            "/jobs/{job_id}": {
+                "get": {
+                    "summary": "Get job status",
+                    "operationId": "jobStatus",
+                    "description": (
+                        "Poll until `status` is terminal: `completed`, `completed_with_errors`, or `failed`. "
+                        "When complete, `result_url` points to the full JSON result in MinIO."
+                    ),
+                    "parameters": [
+                        {
+                            "name": "job_id",
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "string", "format": "uuid"},
+                        }
+                    ],
+                    "responses": {
+                        "200": {
+                            "description": "Job found",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "job_id": {"type": "string"},
+                                            "status": {"type": "string"},
+                                            "result_url": {"type": "string", "nullable": True},
+                                            "progress": {
+                                                "type": "object",
+                                                "nullable": True,
+                                                "properties": {
+                                                    "total_pages": {"type": "integer"},
+                                                    "processed_pages": {"type": "integer"},
+                                                    "current_step": {"type": "string"},
+                                                },
+                                            },
+                                            "error": {"type": "string", "nullable": True},
+                                            "created_at": {"type": "string"},
+                                            "updated_at": {"type": "string"},
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "404": {"description": "Job not found"},
+                    },
+                }
+            },
+            "/health": {
+                "get": {
+                    "summary": "Health check",
+                    "operationId": "health",
+                    "responses": {
+                        "200": {
+                            "description": "OK",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {"status": {"type": "string"}},
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        },
+    }
 
 
 def _response(status_code: int, body: dict) -> dict:
@@ -52,10 +214,10 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
     if method == "GET" and path == "/health":
         return _response(200, {"status": "healthy"})
 
-    if method == "GET" and path == "/docs":
+    if method in ("GET", "HEAD") and path == "/docs":
         return _html_response(200, _SWAGGER_HTML)
 
-    if method == "GET" and path == "/openapi.json":
+    if method in ("GET", "HEAD") and path == "/openapi.json":
         return await _handle_openapi()
 
     if method == "POST" and path == "/process":
@@ -160,32 +322,8 @@ async def _handle_get_job(job_id: str, container: object) -> dict:
 
 
 async def _handle_openapi() -> dict:
-    spec = {
-        "openapi": "3.0.0",
-        "info": {"title": "OCR AI Service", "version": "6.0.0"},
-        "paths": {
-            "/process": {
-                "post": {
-                    "summary": "Submit a PDF for OCR processing",
-                    "requestBody": {
-                        "required": True,
-                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ProcessRequest"}}},
-                    },
-                    "responses": {"202": {"description": "Job queued"}},
-                }
-            },
-            "/jobs/{job_id}": {
-                "get": {
-                    "summary": "Get job status",
-                    "parameters": [{"name": "job_id", "in": "path", "required": True, "schema": {"type": "string"}}],
-                    "responses": {"200": {"description": "Job status"}, "404": {"description": "Job not found"}},
-                }
-            },
-            "/health": {"get": {"summary": "Health check", "responses": {"200": {"description": "Healthy"}}}},
-        },
-    }
     return {
         "statusCode": 200,
         "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(spec),
+        "body": json.dumps(_build_openapi_spec()),
     }

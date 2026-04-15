@@ -14,12 +14,15 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      ENVIRONMENT      = var.environment
-      AWS_REGION       = var.aws_region
-      DYNAMODB_TABLE   = aws_dynamodb_table.jobs.name
-      S3_BUCKET        = aws_s3_bucket.results.bucket
+      ENVIRONMENT       = var.environment
+      AWS_REGION        = var.aws_region
+      DYNAMODB_TABLE    = aws_dynamodb_table.jobs.name
       OCR_JOB_QUEUE_URL = aws_sqs_queue.jobs.url
-      HTTP_API_BASE_URL = "https://${aws_apigatewayv2_api.http.api_endpoint}"
+      HTTP_API_BASE_URL = var.http_api_base_url
+      MINIO_URL         = var.minio_url
+      MINIO_ACCESS_KEY  = var.minio_access_key
+      MINIO_SECRET_KEY  = var.minio_secret_key
+      MINIO_BUCKET      = var.minio_bucket
     }
   }
 
@@ -42,14 +45,16 @@ resource "aws_lambda_function" "worker" {
 
   environment {
     variables = {
-      ENVIRONMENT                  = var.environment
-      AWS_REGION                   = var.aws_region
-      DYNAMODB_TABLE               = aws_dynamodb_table.jobs.name
-      S3_BUCKET                    = aws_s3_bucket.results.bucket
-      RESULTS_BASE_URL             = var.results_base_url
-      MISTRAL_API_KEY              = var.mistral_api_key
-      MISTRAL_RATE_LIMIT_TABLE     = aws_dynamodb_table.rate_limit.name
-      WORKER_FUNCTION_NAME         = "${local.prefix}-worker"
+      ENVIRONMENT              = var.environment
+      AWS_REGION               = var.aws_region
+      DYNAMODB_TABLE           = aws_dynamodb_table.jobs.name
+      MISTRAL_API_KEY          = var.mistral_api_key
+      MISTRAL_RATE_LIMIT_TABLE = aws_dynamodb_table.rate_limit.name
+      WORKER_FUNCTION_NAME     = "${local.prefix}-worker"
+      MINIO_URL                = var.minio_url
+      MINIO_ACCESS_KEY         = var.minio_access_key
+      MINIO_SECRET_KEY         = var.minio_secret_key
+      MINIO_BUCKET             = var.minio_bucket
     }
   }
 

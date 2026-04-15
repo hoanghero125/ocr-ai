@@ -2,6 +2,13 @@ resource "aws_apigatewayv2_api" "http" {
   name          = "${local.prefix}-api"
   protocol_type = "HTTP"
   tags          = local.common_tags
+
+  cors_configuration {
+    allow_headers = ["content-type", "authorization", "x-api-key"]
+    allow_methods = ["GET", "POST", "OPTIONS"]
+    allow_origins = ["https://ocr-ai.digeni.vn", "https://*.digeni.vn"]
+    max_age       = 300
+  }
 }
 
 resource "aws_apigatewayv2_stage" "default" {

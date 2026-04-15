@@ -42,12 +42,12 @@ def test_sanitize_label_preserves_normal_text():
     assert sanitize_label("Full Name") == "Full Name"
 
 
-# ── ExtractionStage ───────────────────────────────────────────────────────────
+# ── ExtractionStage helpers ───────────────────────────────────────────────────
 
-def _make_chat_response(fields: dict) -> MagicMock:
-    """Build a mock chat response with given field values."""
+def _make_chat_response(payload: dict) -> MagicMock:
+    """Build a mock chat response with the new extraction format."""
     msg = MagicMock()
-    msg.content = json.dumps(fields)
+    msg.content = json.dumps(payload)
     choice = MagicMock()
     choice.message = msg
     response = MagicMock()
@@ -55,64 +55,122 @@ def _make_chat_response(fields: dict) -> MagicMock:
     return response
 
 
+def _extraction_response(extracted: list = None, auto: list = None, free_texts: list = None,
+                          confidence: float = 0.9, handwritten_pct: int = 0) -> dict:
+    return {
+        "extracted_fields": extracted or [],
+        "auto_fields": auto or [],
+        "free_texts": free_texts or [],
+        "confidence": confidence,
+        "handwritten_percentage": handwritten_pct,
+    }
+
+
 def _make_stage(mock_client: MagicMock) -> ExtractionStage:
-    return ExtractionStage(
-        client=mock_client,
-        max_concurrent_pages=4,
-        max_retries_per_page=2,
-    )
+    return ExtractionStage(client=mock_client, max_concurrent_pages=4, max_retries_per_page=2)
 
 
 def _make_page(page_number: int = 1, markdown: str = "Sample text") -> PageResult:
     return PageResult(page_number=page_number, markdown=markdown)
 
 
+# ── min_confidence ────────────────────────────────────────────────────────────
+
 @pytest.mark.asyncio
 async def test_min_confidence_below_threshold_sets_value_to_null():
     client = MagicMock()
-    client.chat = AsyncMock(return_value=_make_chat_response({
-        "name": {"value": "Alice", "confidence": 0.3}
-    }))
+    client.chat = AsyncMock(return_value=_make_chat_response(_extraction_response(
+        extracted=[{"key": "name", "label": "Name", "value": "Alice", "confidence": 0.3, "field_type": "typed"}]
+    )))
     stage = _make_stage(client)
     fi = (FieldInstruction(key="name", label="Name", min_confidence=0.5),)
 
     pages = await stage.run([_make_page()], fi)
 
-    assert pages[0].fields[0].value is None
-    assert pages[0].fields[0].confidence == pytest.approx(0.3)
+    assert pages[0].extracted_fields[0].value is None
+    assert pages[0].extracted_fields[0].confidence == pytest.approx(0.3)
 
 
 @pytest.mark.asyncio
 async def test_min_confidence_above_threshold_keeps_value():
     client = MagicMock()
-    client.chat = AsyncMock(return_value=_make_chat_response({
-        "name": {"value": "Alice", "confidence": 0.9}
-    }))
+    client.chat = AsyncMock(return_value=_make_chat_response(_extraction_response(
+        extracted=[{"key": "name", "label": "Name", "value": "Alice", "confidence": 0.9, "field_type": "typed"}]
+    )))
     stage = _make_stage(client)
     fi = (FieldInstruction(key="name", label="Name", min_confidence=0.5),)
 
     pages = await stage.run([_make_page()], fi)
 
-    assert pages[0].fields[0].value == "Alice"
+    assert pages[0].extracted_fields[0].value == "Alice"
 
 
 @pytest.mark.asyncio
-async def test_field_missing_from_response_defaults_to_null_and_zero():
+async def test_field_missing_from_response_returns_empty_extracted():
     client = MagicMock()
-    client.chat = AsyncMock(return_value=_make_chat_response({}))
+    client.chat = AsyncMock(return_value=_make_chat_response(_extraction_response()))
     stage = _make_stage(client)
     fi = (FieldInstruction(key="name", label="Name"),)
 
     pages = await stage.run([_make_page()], fi)
 
-    assert pages[0].fields[0].value is None
-    assert pages[0].fields[0].confidence == 0.0
+    assert pages[0].extracted_fields == []
 
+
+# ── auto_fields and free_texts ────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_auto_fields_are_parsed():
+    client = MagicMock()
+    client.chat = AsyncMock(return_value=_make_chat_response(_extraction_response(
+        auto=[{"key": "ngay_thang", "label": "Ngày tháng", "value": "01/01/2024", "confidence": 0.95, "field_type": "typed"}]
+    )))
+    stage = _make_stage(client)
+
+    pages = await stage.run([_make_page()], ())
+
+    assert len(pages[0].auto_fields) == 1
+    assert pages[0].auto_fields[0].key == "ngay_thang"
+    assert pages[0].auto_fields[0].value == "01/01/2024"
+
+
+@pytest.mark.asyncio
+async def test_free_texts_are_parsed():
+    client = MagicMock()
+    client.chat = AsyncMock(return_value=_make_chat_response(_extraction_response(
+        free_texts=[{"content": "Paragraph text", "confidence": 0.9, "field_type": "typed", "position": "body"}]
+    )))
+    stage = _make_stage(client)
+
+    pages = await stage.run([_make_page()], ())
+
+    assert len(pages[0].free_texts) == 1
+    assert pages[0].free_texts[0].content == "Paragraph text"
+    assert pages[0].free_texts[0].position == "body"
+
+
+@pytest.mark.asyncio
+async def test_handwritten_percentage_and_confidence_are_parsed():
+    client = MagicMock()
+    client.chat = AsyncMock(return_value=_make_chat_response(
+        _extraction_response(confidence=0.85, handwritten_pct=30)
+    ))
+    stage = _make_stage(client)
+
+    pages = await stage.run([_make_page()], ())
+
+    assert pages[0].confidence == pytest.approx(0.85)
+    assert pages[0].handwritten_percentage == 30
+
+
+# ── retry and error handling ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_per_page_retry_fires_on_transient_error():
     client = MagicMock()
-    good_response = _make_chat_response({"name": {"value": "Bob", "confidence": 0.8}})
+    good_response = _make_chat_response(_extraction_response(
+        extracted=[{"key": "name", "label": "Name", "value": "Bob", "confidence": 0.8, "field_type": "typed"}]
+    ))
     client.chat = AsyncMock(
         side_effect=[MistralAPIError("429", status_code=429), good_response]
     )
@@ -123,7 +181,7 @@ async def test_per_page_retry_fires_on_transient_error():
         pages = await stage.run([_make_page()], fi)
 
     assert client.chat.call_count == 2
-    assert pages[0].fields[0].value == "Bob"
+    assert pages[0].extracted_fields[0].value == "Bob"
 
 
 @pytest.mark.asyncio
@@ -136,16 +194,17 @@ async def test_page_error_after_all_retries_returns_error_not_raise():
     with patch("asyncio.sleep", new_callable=AsyncMock):
         pages = await stage.run([_make_page()], fi)
 
-    assert pages[0].error is not None
-    assert pages[0].fields == []
+    assert pages[0].error_message is not None
+    assert pages[0].status == "error"
+    assert pages[0].extracted_fields == []
 
 
 @pytest.mark.asyncio
 async def test_on_page_done_callback_called():
     client = MagicMock()
-    client.chat = AsyncMock(return_value=_make_chat_response(
-        {"name": {"value": "X", "confidence": 1.0}}
-    ))
+    client.chat = AsyncMock(return_value=_make_chat_response(_extraction_response(
+        extracted=[{"key": "name", "label": "Name", "value": "X", "confidence": 1.0, "field_type": "typed"}]
+    )))
     stage = _make_stage(client)
     fi = (FieldInstruction(key="name", label="Name"),)
 

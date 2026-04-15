@@ -67,7 +67,7 @@ async def test_run_fields_are_empty_after_stage1():
         {"index": 0, "markdown": "some text"},
     ]))
     pages = await stage.run("https://example.com/doc.pdf")
-    assert pages[0].fields == []
+    assert pages[0].extracted_fields == []
 
 
 @pytest.mark.asyncio

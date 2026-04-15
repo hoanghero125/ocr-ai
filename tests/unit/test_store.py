@@ -82,7 +82,7 @@ def test_get_pages_returns_typed_page_results():
             page_number=1,
             markdown="hello",
             tables=[ExtractedTable(headers=["A", "B"], rows=[["1", "2"]], raw="<table>")],
-            fields=[ExtractedField(key="name", label="Name", value="Alice", confidence=0.9)],
+            extracted_fields=[ExtractedField(key="name", label="Name", value="Alice", confidence=0.9)],
         )
     ]
     store.put_pages("test/key.json", pages)
@@ -90,18 +90,18 @@ def test_get_pages_returns_typed_page_results():
 
     assert isinstance(result[0], PageResult)
     assert isinstance(result[0].tables[0], ExtractedTable)
-    assert isinstance(result[0].fields[0], ExtractedField)
-    assert result[0].fields[0].value == "Alice"
+    assert isinstance(result[0].extracted_fields[0], ExtractedField)
+    assert result[0].extracted_fields[0].value == "Alice"
     assert result[0].tables[0].headers == ["A", "B"]
     assert result[0].tables[0].rows == [["1", "2"]]
 
 
 def test_get_pages_preserves_page_error():
     store, _ = _round_trip_store()
-    pages = [PageResult(page_number=1, markdown="text", error="extraction failed")]
+    pages = [PageResult(page_number=1, markdown="text", error_message="extraction failed")]
     store.put_pages("test/key.json", pages)
     result = store.get_pages("test/key.json")
-    assert result[0].error == "extraction failed"
+    assert result[0].error_message == "extraction failed"
 
 
 def test_get_pages_handles_empty_tables_and_fields():
@@ -110,4 +110,4 @@ def test_get_pages_handles_empty_tables_and_fields():
     store.put_pages("test/key.json", pages)
     result = store.get_pages("test/key.json")
     assert result[0].tables == []
-    assert result[0].fields == []
+    assert result[0].extracted_fields == []

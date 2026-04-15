@@ -30,8 +30,32 @@ variable "ecr_image_uri" {
   type        = string
 }
 
-variable "results_base_url" {
-  description = "Base URL for result file links (e.g. CloudFront domain)"
+variable "minio_url" {
+  description = "MinIO endpoint URL"
   type        = string
-  default     = ""
+  default     = "https://minioapi.digeni.vn"
+}
+
+variable "minio_access_key" {
+  description = "MinIO access key"
+  type        = string
+  sensitive   = true
+}
+
+variable "minio_secret_key" {
+  description = "MinIO secret key"
+  type        = string
+  sensitive   = true
+}
+
+variable "minio_bucket" {
+  description = "MinIO bucket name for results and checkpoints"
+  type        = string
+  default     = "mistral-ai"
+}
+
+variable "http_api_base_url" {
+  description = "Public base URL of the API (used in status_url field of job responses)"
+  type        = string
+  default     = "https://ocr-ai.digeni.vn"
 }
