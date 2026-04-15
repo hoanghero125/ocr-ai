@@ -1,6 +1,7 @@
 """Pydantic validation schemas for API request and response bodies."""
 
 import re
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, field_validator, model_validator
@@ -11,8 +12,6 @@ _MAX_FIELD_INSTRUCTIONS = 50
 _MAX_KEY_LEN = 50
 _MAX_LABEL_LEN = 200
 _MAX_DESCRIPTION_LEN = 500
-_MAX_METADATA_KEYS = 20
-_MAX_METADATA_VALUE_LEN = 500
 
 
 class FieldInstructionSchema(BaseModel):
@@ -59,7 +58,13 @@ class FieldInstructionSchema(BaseModel):
 class ProcessOptions(BaseModel):
     output_format: str = "structured"
     include_confidence: bool = True
-    language_hints: list[str] = []
+    language_hints: list[str] = ["vi", "en"]
+
+
+class JobMetadata(BaseModel):
+    client_id: str | None = None
+    document_id: str | None = None
+    extra: dict[str, Any] | None = None
 
 
 class ProcessRequest(BaseModel):
@@ -67,7 +72,7 @@ class ProcessRequest(BaseModel):
     callback_url: str | None = None
     options: ProcessOptions = ProcessOptions()
     field_instructions: list[FieldInstructionSchema] = []
-    metadata: dict[str, Any] = {}
+    metadata: JobMetadata | None = None
 
     @field_validator("pdf_url")
     @classmethod
@@ -83,24 +88,15 @@ class ProcessRequest(BaseModel):
             raise ValueError("callback_url must be an https URL")
         return v
 
-    @field_validator("metadata")
-    @classmethod
-    def metadata_size_limit(cls, v: dict[str, Any]) -> dict[str, Any]:
-        if len(v) > _MAX_METADATA_KEYS:
-            raise ValueError(f"metadata may not exceed {_MAX_METADATA_KEYS} keys")
-        for key, val in v.items():
-            if isinstance(val, str) and len(val) > _MAX_METADATA_VALUE_LEN:
-                raise ValueError(
-                    f"metadata value for '{key}' must not exceed {_MAX_METADATA_VALUE_LEN} characters"
-                )
-        return v
-
     @model_validator(mode="after")
-    def check_field_instructions_limit(self) -> "ProcessRequest":
+    def check_field_instructions(self) -> "ProcessRequest":
         if len(self.field_instructions) > _MAX_FIELD_INSTRUCTIONS:
             raise ValueError(
                 f"field_instructions may not exceed {_MAX_FIELD_INSTRUCTIONS} items"
             )
+        keys = [fi.key for fi in self.field_instructions]
+        if len(keys) != len(set(keys)):
+            raise ValueError("field_instructions must have unique keys")
         return self
 
 
@@ -108,6 +104,8 @@ class ProcessResponse(BaseModel):
     job_id: str
     status: str
     status_url: str
+    created_at: datetime
+    message: str = "Job queued successfully"
 
 
 class ProgressSchema(BaseModel):
