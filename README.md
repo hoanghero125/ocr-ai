@@ -212,6 +212,7 @@ terraform apply \
 | `minio_url` | no | `https://minioapi.digeni.vn` | MinIO endpoint URL |
 | `minio_bucket` | no | `mistral-ai` | MinIO bucket for results and checkpoints |
 | `http_api_base_url` | no | `https://ocr-ai.digeni.vn` | Public API URL (used in `status_url` responses) |
+| `api_token` | no | `""` | Bearer token for API auth (empty = disabled) |
 
 ### AWS resources created
 
@@ -255,6 +256,7 @@ All settings are read from environment variables (see `.env.example`):
 | `WEBHOOK_MAX_RETRIES` | `3` | Webhook retry attempts |
 | `HTTP_API_BASE_URL` | `https://ocr-ai.digeni.vn` | Public API base URL |
 | `WORKER_FUNCTION_NAME` | `""` | Worker Lambda name for self-invocation |
+| `API_TOKEN` | `""` | Bearer token for API auth (empty = disabled) |
 | `MISTRAL_RATE_LIMIT_TABLE` | `""` | DynamoDB table for rate limiting (empty = disabled) |
 
 ## Testing
@@ -305,6 +307,18 @@ scripts/
 └── local_server.py        # FastAPI dev server (real DynamoDB + MinIO + Mistral, no SQS)
 terraform/                 # All infrastructure-as-code
 ```
+
+## Authentication
+
+All endpoints except `/health`, `/docs`, and `/openapi.json` require a Bearer token:
+
+```
+Authorization: Bearer <token>
+```
+
+Returns `401 Unauthorized` if the header is missing or the token is wrong. Auth is disabled when `API_TOKEN` is empty (local dev default).
+
+Set the token via the `API_TOKEN` env var (or `var.api_token` in Terraform).
 
 ## Security Notes
 
