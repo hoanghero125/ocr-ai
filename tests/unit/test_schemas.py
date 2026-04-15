@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.api.schemas import FieldInstructionSchema, ProcessRequest
+from src.api.schemas import FieldInstructionSchema, JobMetadata, ProcessRequest
 
 
 # ── FieldInstructionSchema — key ──────────────────────────────────────────────
@@ -130,20 +130,24 @@ def test_callback_url_rejects_ftp():
 
 # ── ProcessRequest — metadata ─────────────────────────────────────────────────
 
-def test_metadata_valid():
-    r = ProcessRequest(pdf_url="https://example.com/doc.pdf", metadata={"ref": "abc123"})
-    assert r.metadata["ref"] == "abc123"
+def test_metadata_structured_valid():
+    r = ProcessRequest(
+        pdf_url="https://example.com/doc.pdf",
+        metadata={"client_id": "ocr-core-backend", "document_id": "2303", "extra": {"classify": "FILE", "file_id": 4102}},
+    )
+    assert r.metadata.client_id == "ocr-core-backend"
+    assert r.metadata.document_id == "2303"
+    assert r.metadata.extra == {"classify": "FILE", "file_id": 4102}
 
 
-def test_metadata_rejects_too_many_keys():
-    meta = {f"k{i}": "v" for i in range(21)}
-    with pytest.raises(ValidationError, match="20"):
-        ProcessRequest(pdf_url="https://example.com/doc.pdf", metadata=meta)
+def test_metadata_none_is_allowed():
+    r = ProcessRequest(pdf_url="https://example.com/doc.pdf", metadata=None)
+    assert r.metadata is None
 
 
-def test_metadata_rejects_long_value():
-    with pytest.raises(ValidationError, match="500"):
-        ProcessRequest(pdf_url="https://example.com/doc.pdf", metadata={"ref": "x" * 501})
+def test_metadata_omitted_is_none():
+    r = ProcessRequest(pdf_url="https://example.com/doc.pdf")
+    assert r.metadata is None
 
 
 # ── ProcessRequest — field_instructions limit ─────────────────────────────────
@@ -158,3 +162,9 @@ def test_field_instructions_at_limit_passes():
     fields = [{"key": f"f{i:02d}", "label": f"Field {i}"} for i in range(50)]
     r = ProcessRequest(pdf_url="https://example.com/doc.pdf", field_instructions=fields)
     assert len(r.field_instructions) == 50
+
+
+def test_field_instructions_duplicate_keys_rejected():
+    fields = [{"key": "field_1", "label": "A"}, {"key": "field_1", "label": "B"}]
+    with pytest.raises(ValidationError, match="unique keys"):
+        ProcessRequest(pdf_url="https://example.com/doc.pdf", field_instructions=fields)

@@ -4,6 +4,7 @@ import asyncio
 import dataclasses
 import json
 import uuid
+from datetime import datetime, timezone
 
 import boto3
 from pydantic import ValidationError
@@ -83,6 +84,7 @@ async def _handle_process(event: dict, container: object) -> dict:
         return _response(400, {"error": str(exc)})
 
     job_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc)
     field_instructions = tuple(
         FieldInstruction(
             key=fi.key,
@@ -99,7 +101,7 @@ async def _handle_process(event: dict, container: object) -> dict:
         callback_url=request.callback_url,
         field_instructions=field_instructions,
         options=request.options.model_dump(),
-        metadata=request.metadata,
+        metadata=request.metadata.model_dump() if request.metadata else {},
     )
 
     repo = container.get_repo()
@@ -118,7 +120,13 @@ async def _handle_process(event: dict, container: object) -> dict:
 
     return _response(
         202,
-        ProcessResponse(job_id=job_id, status="queued", status_url=status_url).model_dump(),
+        ProcessResponse(
+            job_id=job_id,
+            status="queued",
+            status_url=status_url,
+            created_at=created_at,
+            message="Job queued successfully",
+        ).model_dump(),
     )
 
 
