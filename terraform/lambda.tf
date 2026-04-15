@@ -19,6 +19,7 @@ resource "aws_lambda_function" "api" {
       DYNAMODB_TABLE    = aws_dynamodb_table.jobs.name
       OCR_JOB_QUEUE_URL = aws_sqs_queue.jobs.url
       HTTP_API_BASE_URL = var.http_api_base_url
+      API_TOKEN         = var.api_token
       MINIO_URL         = var.minio_url
       MINIO_ACCESS_KEY  = var.minio_access_key
       MINIO_SECRET_KEY  = var.minio_secret_key

@@ -4,6 +4,7 @@ import asyncio
 import copy
 import dataclasses
 import json
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -206,6 +207,24 @@ def _html_response(status_code: int, html: str) -> dict:
     }
 
 
+_PUBLIC_PATHS = {"/health", "/docs", "/openapi.json"}
+
+
+def _check_auth(event: dict) -> dict | None:
+    """Return a 401 response if the Bearer token is missing or invalid, else None."""
+    expected = os.environ.get("API_TOKEN", "")
+    if not expected:
+        return None  # auth disabled when API_TOKEN is not set
+
+    headers = event.get("headers") or {}
+    # API Gateway v2 lowercases all header names
+    auth_header = headers.get("authorization") or headers.get("Authorization") or ""
+    parts = auth_header.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or parts[1] != expected:
+        return _response(401, {"error": "Unauthorized"})
+    return None
+
+
 async def handle_api_event(event: dict, context: object, container: object) -> dict:
     """Route an API Gateway event to the correct handler."""
     method = event.get("httpMethod") or event.get("requestContext", {}).get("http", {}).get("method", "")
@@ -219,6 +238,11 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
 
     if method in ("GET", "HEAD") and path == "/openapi.json":
         return await _handle_openapi()
+
+    # Auth required for all other endpoints
+    if path not in _PUBLIC_PATHS:
+        if (denied := _check_auth(event)) is not None:
+            return denied
 
     if method == "POST" and path == "/process":
         return await _handle_process(event, container)

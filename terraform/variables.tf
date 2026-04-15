@@ -59,3 +59,10 @@ variable "http_api_base_url" {
   type        = string
   default     = "https://ocr-ai.digeni.vn"
 }
+
+variable "api_token" {
+  description = "Bearer token required for /process and /jobs endpoints (leave empty to disable auth)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
