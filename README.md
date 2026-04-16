@@ -97,6 +97,7 @@ Content-Type: application/json
 Response `202`:
 ```json
 {
+  "code": 0,
   "job_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "queued",
   "status_url": "https://ocr-ai.digeni.vn/jobs/550e8400-...",
@@ -117,13 +118,31 @@ Response `202`:
 GET /jobs/{job_id}
 ```
 
+Success response:
 ```json
 {
+  "code": 0,
   "job_id": "550e8400-...",
   "status": "completed",
   "result_url": "https://minioapi.digeni.vn/mistral-ai/results/550e8400-.../result.json",
   "progress": { "total_pages": 3, "processed_pages": 3, "current_step": "Processing complete" },
+  "error_code": null,
   "error": null,
+  "created_at": "2025-01-01T00:00:00+00:00",
+  "updated_at": "2025-01-01T00:01:30+00:00"
+}
+```
+
+Failed response:
+```json
+{
+  "code": 6001,
+  "job_id": "550e8400-...",
+  "status": "failed",
+  "result_url": null,
+  "progress": null,
+  "error_code": 6001,
+  "error": "MistralAPIError: upstream timeout after 120s",
   "created_at": "2025-01-01T00:00:00+00:00",
   "updated_at": "2025-01-01T00:01:30+00:00"
 }
@@ -297,6 +316,7 @@ src/
 │   ├── continuation.py    # Lambda self-invocation trigger
 │   └── processor.py       # Orchestrates OCR → extraction → checkpoint → webhook
 ├── shared/
+│   ├── codes.py           # Numeric response/error codes (single source of truth)
 │   ├── config.py          # Settings loaded from env vars (lru_cached)
 │   ├── exceptions.py      # Typed exceptions (JobNotFoundError, SSRFBlockedError, …)
 │   ├── logging.py         # Structured JSON logger with secret redaction
@@ -309,6 +329,42 @@ scripts/
 └── local_server.py        # FastAPI dev server (real DynamoDB + MinIO + Mistral, no SQS)
 terraform/                 # All infrastructure-as-code
 ```
+
+## Response Codes
+
+Every response includes a top-level `code` field. `code = 0` means success. Any non-zero value is an error.
+
+### API errors — returned directly in the response body
+
+| `code` | HTTP | Mô tả |
+|--------|------|-------|
+| `0` | — | Thành công |
+| `1001` | 400 | VALIDATION_ERROR — Request body sai schema (thiếu `pdf_url`, key không hợp lệ...) |
+| `1002` | 400 | INVALID_JSON — Body không phải JSON hợp lệ |
+| `1003` | 400 | INVALID_URL — `pdf_url` / `callback_url` không phải URL hợp lệ |
+| `1004` | 400 | URL_NOT_ALLOWED — URL trỏ vào địa chỉ nội bộ (SSRF protection) |
+| `2001` | 401 | UNAUTHORIZED — Thiếu hoặc sai `Authorization: Bearer <token>` |
+| `3001` | 404 | JOB_NOT_FOUND — Không tìm thấy job với `job_id` đã cho |
+| `3002` | 404 | NOT_FOUND — Route không tồn tại |
+| `5001` | 503 | DATABASE_ERROR — DynamoDB không phản hồi, có thể retry |
+| `5002` | 503 | QUEUE_ERROR — SQS không phản hồi, có thể retry |
+| `5003` | 500 | INTERNAL_ERROR — Lỗi không xác định ở tầng API |
+
+Error response shape:
+```json
+{ "code": 2001, "message": "Missing or invalid Bearer token" }
+```
+
+### Job pipeline errors — trong `GET /jobs/{job_id}` khi `status = "failed"`
+
+Khi job fail, `code` ở top-level = `error_code`, và `error` chứa mô tả chi tiết.
+
+| `code` / `error_code` | Mô tả |
+|----------------------|-------|
+| `6001` | OCR_FAILED — Mistral OCR API lỗi (timeout, 5xx...) |
+| `6002` | RATE_LIMIT_ERROR — Chờ rate limit Mistral quá lâu |
+| `6003` | CHECKPOINT_ERROR — Lỗi lưu/tải checkpoint hoặc vượt max continuations |
+| `6004` | JOB_INTERNAL_ERROR — Lỗi không xác định trong pipeline xử lý |
 
 ## Authentication
 
