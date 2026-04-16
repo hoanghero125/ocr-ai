@@ -79,6 +79,18 @@ def _err(status: int, code: str, message: str) -> JSONResponse:
     return JSONResponse(status_code=status, content={"code": code, "message": message})
 
 
+def _require_auth_or_401(http_request: Request) -> JSONResponse | None:
+    """Enforce Bearer auth when API_TOKEN is set (same behavior as Lambda handler)."""
+    expected = os.environ.get("API_TOKEN", "")
+    if not expected:
+        return None
+    auth_header = http_request.headers.get("authorization", "")
+    parts = auth_header.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or parts[1] != expected:
+        return _err(401, "UNAUTHORIZED", "Missing or invalid Bearer token")
+    return None
+
+
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
     _log.error(
@@ -100,6 +112,9 @@ async def health():
 @app.post("/process", status_code=202)
 async def process(http_request: Request, background_tasks: BackgroundTasks):
     """Submit a PDF for async processing — returns job_id immediately."""
+    if (denied := _require_auth_or_401(http_request)) is not None:
+        return denied
+
     try:
         body_dict = await http_request.json()
         request = ProcessRequest.model_validate(body_dict)
