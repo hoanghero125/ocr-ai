@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError
+from decimal import Decimal
 
 from src.infra.repository import JobRepository
 from src.models.job import JobStatus
@@ -45,6 +46,20 @@ def test_create_sets_timestamps():
     item = table.put_item.call_args.kwargs["Item"]
     assert "created_at" in item
     assert "updated_at" in item
+
+
+def test_create_converts_nested_floats_to_decimal():
+    repo, table = _make_repo()
+    repo.create(
+        "job-1",
+        {
+            "field_instructions": [{"min_confidence": 0.8}],
+            "metadata": {"extra": {"score": 1.25}},
+        },
+    )
+    payload = table.put_item.call_args.kwargs["Item"]["payload"]
+    assert payload["field_instructions"][0]["min_confidence"] == Decimal("0.8")
+    assert payload["metadata"]["extra"]["score"] == Decimal("1.25")
 
 
 # ── get ───────────────────────────────────────────────────────────────────────

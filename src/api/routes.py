@@ -150,6 +150,7 @@ def _build_openapi_spec() -> dict:
                             }
                         },
                     },
+                    "security": [{"BearerAuth": []}],
                     "responses": {
                         "202": {
                             "description": "Job accepted",
@@ -192,6 +193,7 @@ def _build_openapi_spec() -> dict:
                             "schema": {"type": "string", "format": "uuid"},
                         }
                     ],
+                    "security": [{"BearerAuth": []}],
                     "responses": {
                         "200": {
                             "description": "Job found",
@@ -266,12 +268,18 @@ def _error(status_code: int, code: str, message: str) -> dict:
     return _response(status_code, {"code": code, "message": message})
 
 
-def _log_request(method: str, path: str, status_code: int, t0: float) -> None:
+def _log_request(method: str, path: str, result: dict, t0: float) -> None:
     ms = int((time.monotonic() - t0) * 1000)
-    _logger.info(
-        "request",
-        extra={"method": method, "path": path, "status": status_code, "duration_ms": ms},
-    )
+    status = result["statusCode"]
+    extra: dict = {"method": method, "path": path, "status": status, "duration_ms": ms}
+    if status >= 400:
+        try:
+            body = json.loads(result.get("body", "{}"))
+            extra["error_code"] = body.get("code")
+            extra["error_message"] = body.get("message")
+        except Exception:
+            pass
+    _logger.info("request", extra=extra)
 
 
 def _html_response(status_code: int, html: str) -> dict:
@@ -319,7 +327,7 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
         # Auth required for all other endpoints
         if path not in _PUBLIC_PATHS:
             if (denied := _check_auth(event)) is not None:
-                _log_request(method, path, denied["statusCode"], t0)
+                _log_request(method, path, denied, t0)
                 return denied
 
         if method == "POST" and path == "/process":
@@ -330,13 +338,18 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
         else:
             result = _error(404, "NOT_FOUND", f"Route {method} {path} not found")
 
-        _log_request(method, path, result["statusCode"], t0)
+        _log_request(method, path, result, t0)
         return result
 
     except Exception as exc:
         _logger.error("unhandled_error", extra={"error": str(exc)}, exc_info=True)
         result = _error(500, "INTERNAL_ERROR", str(exc))
-        _log_request(method if "method" in dir() else "?", path if "path" in dir() else "/", 500, t0 if "t0" in dir() else time.monotonic())
+        _log_request(
+            method if "method" in dir() else "?",
+            path if "path" in dir() else "/",
+            result,
+            t0 if "t0" in dir() else time.monotonic(),
+        )
         return result
 
 
@@ -431,6 +444,8 @@ async def _handle_get_job(job_id: str, container: object) -> dict:
             "processed_pages": progress_raw.get("processed_pages", 0),
             "current_step": progress_raw.get("current_step", ""),
         }
+
+    _logger.info("job_status_queried", extra={"job_id": job_id, "status": item["status"]})
 
     return _response(
         200,

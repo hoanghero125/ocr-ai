@@ -1,0 +1,54 @@
+# Local API. Object storage uses MinIO over the S3 API (see src/container.py — not AWS S3).
+#
+# Secrets: create ".env" next to this file (see docker-compose.env.example) or export variables.
+# Run: docker compose up --build
+# Docs: http://localhost:8000/docs
+
+services:
+  ocr-ai:
+    container_name: ocr-ai
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-01ikfDkJzHoCKx0IRN5GJyFeQoUAQ0xt}
+
+      # API auth (empty = disabled)
+      API_TOKEN: ${API_TOKEN:-yvEyrkRaOmgVTVNJsoQTpy0f_MddbQrffs5Zm5RqxLg}
+
+      # AWS: DynamoDB + SQS only (not object storage)
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-AKIAT6XZ6GES22RRGRD7}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-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}
+      AWS_REGION: ${AWS_REGION:-ap-southeast-1}
+
+      DYNAMODB_TABLE: ${DYNAMODB_TABLE:-ocr_jobs}
+      OCR_JOB_QUEUE_URL: ${OCR_JOB_QUEUE_URL:-https://sqs.ap-southeast-1.amazonaws.com/272180850981/ocr_test}
+
+      # MinIO (S3-compatible API)
+      MINIO_URL: ${MINIO_URL:-https://minio.digeni.vn}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-admin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-password123}
+      MINIO_BUCKET: ${MINIO_BUCKET:-mistral-ai}
+
+      HTTP_API_BASE_URL: ${HTTP_API_BASE_URL:-https://ocr-ai.digeni.vn}
+
+      WORKER_FUNCTION_NAME: ${WORKER_FUNCTION_NAME:-bizgenie-ocr-staging-worker}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+
+      MISTRAL_OCR_MODEL: ${MISTRAL_OCR_MODEL:-mistral-ocr-latest}
+      MISTRAL_CHAT_MODEL: ${MISTRAL_CHAT_MODEL:-mistral-small-latest}
+      MISTRAL_TABLE_FORMAT: ${MISTRAL_TABLE_FORMAT:-html}
+      MISTRAL_TIMEOUT_S: ${MISTRAL_TIMEOUT_S:-120}
+      MISTRAL_MAX_RETRIES: ${MISTRAL_MAX_RETRIES:-4}
+
+      MISTRAL_RATE_LIMIT_TABLE: ${MISTRAL_RATE_LIMIT_TABLE:-}
+
+      MAX_CONCURRENT_PAGES: ${MAX_CONCURRENT_PAGES:-4}
+      LAMBDA_EXTRACT_CONTINUATION_ENABLED: ${LAMBDA_EXTRACT_CONTINUATION_ENABLED:-false}
+      EXTRACT_MAX_RETRIES_PER_PAGE: ${EXTRACT_MAX_RETRIES_PER_PAGE:-2}
+      MAX_CONTINUATIONS: ${MAX_CONTINUATIONS:-5}
+      WEBHOOK_TIMEOUT_S: ${WEBHOOK_TIMEOUT_S:-10}
+      WEBHOOK_MAX_RETRIES: ${WEBHOOK_MAX_RETRIES:-3}
+    restart: unless-stopped

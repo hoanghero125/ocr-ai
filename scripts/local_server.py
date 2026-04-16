@@ -23,15 +23,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# ── Load .env ─────────────────────────────────────────────────────────────────
-env_path = PROJECT_ROOT / ".env"
-if env_path.exists():
-    from dotenv import load_dotenv
-    load_dotenv(env_path)
-else:
-    print("[local] No .env found — copy .env.example to .env and fill in credentials")
-    sys.exit(1)
-
+# ── Config: Docker Compose / shell inject env vars (same keys as Lambda). ─────
 os.environ.setdefault("ENVIRONMENT", "local")
 
 # ── Build Container (same wiring as Lambda cold start) ────────────────────────
@@ -83,11 +75,17 @@ async def _log_requests(request: Request, call_next):
 
 
 def _err(status: int, code: str, message: str) -> JSONResponse:
+    _log.warning("error_response", extra={"status": status, "code": code, "message": message})
     return JSONResponse(status_code=status, content={"code": code, "message": message})
 
 
 @app.exception_handler(Exception)
 async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+    _log.error(
+        "unhandled_error",
+        extra={"method": request.method, "path": request.url.path, "error": str(exc)},
+        exc_info=True,
+    )
     return JSONResponse(
         status_code=500,
         content={"code": "INTERNAL_ERROR", "message": str(exc)},
@@ -148,6 +146,8 @@ async def process(http_request: Request, background_tasks: BackgroundTasks):
 
     background_tasks.add_task(_run_job, payload)
 
+    _log.info("job_received", extra={"job_id": job_id})
+
     status_url = f"http://localhost:8000/jobs/{job_id}"
     return ProcessResponse(
         job_id=job_id,
@@ -159,14 +159,19 @@ async def process(http_request: Request, background_tasks: BackgroundTasks):
 
 
 @app.get("/jobs/{job_id}")
-async def get_job(job_id: str):
+async def get_job(job_id: str, http_request: Request):
     """Poll job status — reads directly from DynamoDB."""
+    if (denied := _require_auth_or_401(http_request)) is not None:
+        return denied
+
     try:
         item = _container.get_repo().get(job_id)
     except JobNotFoundError:
         return _err(404, "JOB_NOT_FOUND", f"Job {job_id} not found")
     except Exception as exc:
         return _err(503, "DATABASE_ERROR", f"Failed to retrieve job: {exc}")
+
+    _log.info("job_status_queried", extra={"job_id": job_id, "status": item["status"]})
 
     return {
         "job_id": item["job_id"],
@@ -191,6 +196,9 @@ async def extract(http_request: Request):
     Process a PDF and return extracted fields directly (no job queue, no polling).
     Same request format as /process. Response matches EXAMPLE_RESPONSE format.
     """
+    if (denied := _require_auth_or_401(http_request)) is not None:
+        return denied
+
     try:
         body_dict = await http_request.json()
         request = ProcessRequest.model_validate(body_dict)

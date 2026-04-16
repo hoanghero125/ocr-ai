@@ -37,21 +37,23 @@ For jobs that exceed the 15-minute Lambda limit, the worker self-invokes with a 
 
 The local dev server uses real infrastructure — DynamoDB, MinIO, and Mistral — with SQS replaced by inline background processing.
 
-### Setup
+### Setup (Docker Compose — recommended)
+
+Edit **`docker-compose.yml`** defaults, or copy **`docker-compose.env.example`** to **`.env`** in the project root and set `MISTRAL_API_KEY`, `AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY` (Compose reads `.env` only for `${VAR}` substitution — do not commit it). Then:
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
-
-# 2. Copy and fill in credentials
-cp .env.example .env
-# Edit .env — set MISTRAL_API_KEY, AWS credentials, MinIO credentials
-
-# 3. Start the server
-python scripts/local_server.py
+docker compose up --build
 ```
 
 Open **http://localhost:8000/docs** for the interactive Swagger UI.
+
+### Setup (Python on the host)
+
+```bash
+pip install -r requirements.txt
+export MISTRAL_API_KEY=...   # plus other vars as in docker-compose.yml
+python scripts/local_server.py
+```
 
 ### Endpoints (local + production)
 
@@ -238,7 +240,7 @@ docker push 123456789.dkr.ecr.ap-southeast-1.amazonaws.com/bizgenie-ocr:latest
 
 ## Configuration
 
-All settings are read from environment variables (see `.env.example`):
+Local dev with Docker reads variables from **`docker-compose.yml`** (Compose can also load a sibling `.env` file for `${VAR}` substitution only). On AWS Lambda, the same variables are set by Terraform.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
