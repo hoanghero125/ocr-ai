@@ -5,6 +5,7 @@ import copy
 import dataclasses
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -203,6 +204,14 @@ def _error(status_code: int, code: str, message: str) -> dict:
     return _response(status_code, {"code": code, "message": message})
 
 
+def _log_request(method: str, path: str, status_code: int, t0: float) -> None:
+    ms = int((time.monotonic() - t0) * 1000)
+    _logger.info(
+        "request",
+        extra={"method": method, "path": path, "status": status_code, "duration_ms": ms},
+    )
+
+
 def _html_response(status_code: int, html: str) -> dict:
     return {
         "statusCode": status_code,
@@ -234,6 +243,7 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
     try:
         method = event.get("httpMethod") or event.get("requestContext", {}).get("http", {}).get("method", "")
         path = event.get("path") or event.get("rawPath", "/")
+        t0 = time.monotonic()
 
         if method == "GET" and path == "/health":
             return _response(200, {"status": "healthy"})
@@ -247,20 +257,25 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
         # Auth required for all other endpoints
         if path not in _PUBLIC_PATHS:
             if (denied := _check_auth(event)) is not None:
+                _log_request(method, path, denied["statusCode"], t0)
                 return denied
 
         if method == "POST" and path == "/process":
-            return await _handle_process(event, container)
-
-        if method == "GET" and path.startswith("/jobs/"):
+            result = await _handle_process(event, container)
+        elif method == "GET" and path.startswith("/jobs/"):
             job_id = path.split("/jobs/", 1)[1].strip("/")
-            return await _handle_get_job(job_id, container)
+            result = await _handle_get_job(job_id, container)
+        else:
+            result = _error(404, "NOT_FOUND", f"Route {method} {path} not found")
 
-        return _error(404, "NOT_FOUND", f"Route {method} {path} not found")
+        _log_request(method, path, result["statusCode"], t0)
+        return result
 
     except Exception as exc:
         _logger.error("unhandled_error", extra={"error": str(exc)}, exc_info=True)
-        return _error(500, "INTERNAL_ERROR", "An unexpected error occurred")
+        result = _error(500, "INTERNAL_ERROR", str(exc))
+        _log_request(method if "method" in dir() else "?", path if "path" in dir() else "/", 500, t0 if "t0" in dir() else time.monotonic())
+        return result
 
 
 async def _handle_process(event: dict, container: object) -> dict:
