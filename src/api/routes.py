@@ -68,6 +68,29 @@ def _build_openapi_spec() -> dict:
     components[root_name] = schema
     _rewrite_defs_to_components(components)
 
+    components["ErrorResponse"] = {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+            "code": {
+                "type": "string",
+                "description": "Machine-readable error code",
+                "example": "VALIDATION_ERROR",
+            },
+            "message": {
+                "type": "string",
+                "description": "Human-readable error description",
+                "example": "pdf_url: field required",
+            },
+        },
+    }
+
+    error_ref = {"$ref": "#/components/schemas/ErrorResponse"}
+    error_response = lambda desc: {
+        "description": desc,
+        "content": {"application/json": {"schema": error_ref}},
+    }
+
     return {
         "openapi": "3.1.0",
         "info": {
@@ -76,12 +99,39 @@ def _build_openapi_spec() -> dict:
             "description": (
                 "PDF OCR extraction service powered by Mistral.\n\n"
                 "Submit a PDF with `POST /process` — returns a `job_id` immediately. "
-                "Poll `GET /jobs/{job_id}` (or use the `status_url` from the response) "
-                "until status is terminal (`completed`, `completed_with_errors`, `failed`). "
-                "Optionally provide a `callback_url` to receive one webhook POST when the job finishes."
+                "Poll `GET /jobs/{job_id}` until status is terminal "
+                "(`completed`, `completed_with_errors`, `failed`). "
+                "Optionally provide a `callback_url` to receive one webhook POST when the job finishes.\n\n"
+                "## Authentication\n\n"
+                "All endpoints except `/health`, `/docs`, `/openapi.json` require:\n\n"
+                "```\nAuthorization: Bearer <token>\n```\n\n"
+                "## Error codes\n\n"
+                "All errors return `{\"code\": \"...\", \"message\": \"...\"}` with these codes:\n\n"
+                "| Code | HTTP | Description |\n"
+                "|------|------|-------------|\n"
+                "| `VALIDATION_ERROR` | 400 | Request body failed schema validation (e.g. missing `pdf_url`) |\n"
+                "| `INVALID_JSON` | 400 | Request body is not valid JSON |\n"
+                "| `INVALID_URL` | 400 | `pdf_url` or `callback_url` is not a valid URL |\n"
+                "| `URL_NOT_ALLOWED` | 400 | URL resolves to a private/internal address (SSRF protection) |\n"
+                "| `UNAUTHORIZED` | 401 | Missing or invalid `Authorization: Bearer <token>` header |\n"
+                "| `JOB_NOT_FOUND` | 404 | No job exists with the given `job_id` |\n"
+                "| `NOT_FOUND` | 404 | Route does not exist |\n"
+                "| `DATABASE_ERROR` | 503 | DynamoDB is unavailable — safe to retry |\n"
+                "| `QUEUE_ERROR` | 503 | SQS is unavailable — safe to retry |\n"
+                "| `INTERNAL_ERROR` | 500 | Unexpected server error |\n"
             ),
         },
-        "components": {"schemas": components},
+        "components": {
+            "schemas": components,
+            "securitySchemes": {
+                "BearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "API token — set via `API_TOKEN` env var on the server",
+                }
+            },
+        },
+        "security": [{"BearerAuth": []}],
         "paths": {
             "/process": {
                 "post": {
@@ -91,6 +141,7 @@ def _build_openapi_spec() -> dict:
                         "Returns **202** immediately. Processing runs asynchronously. "
                         "Use `status_url` or `GET /jobs/{job_id}` to poll for results."
                     ),
+                    "security": [{"BearerAuth": []}],
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -117,7 +168,10 @@ def _build_openapi_spec() -> dict:
                                 }
                             },
                         },
-                        "400": {"description": "Validation error"},
+                        "400": error_response("VALIDATION_ERROR · INVALID_JSON · INVALID_URL · URL_NOT_ALLOWED"),
+                        "401": error_response("UNAUTHORIZED — missing or invalid Bearer token"),
+                        "503": error_response("DATABASE_ERROR · QUEUE_ERROR — safe to retry"),
+                        "500": error_response("INTERNAL_ERROR — unexpected server error"),
                     },
                 }
             },
@@ -129,6 +183,7 @@ def _build_openapi_spec() -> dict:
                         "Poll until `status` is terminal: `completed`, `completed_with_errors`, or `failed`. "
                         "When complete, `result_url` points to the full JSON result in MinIO."
                     ),
+                    "security": [{"BearerAuth": []}],
                     "parameters": [
                         {
                             "name": "job_id",
@@ -146,7 +201,10 @@ def _build_openapi_spec() -> dict:
                                         "type": "object",
                                         "properties": {
                                             "job_id": {"type": "string"},
-                                            "status": {"type": "string"},
+                                            "status": {
+                                                "type": "string",
+                                                "enum": ["queued", "processing", "completed", "completed_with_errors", "failed"],
+                                            },
                                             "result_url": {"type": "string", "nullable": True},
                                             "progress": {
                                                 "type": "object",
@@ -165,7 +223,10 @@ def _build_openapi_spec() -> dict:
                                 }
                             },
                         },
-                        "404": {"description": "Job not found"},
+                        "401": error_response("UNAUTHORIZED — missing or invalid Bearer token"),
+                        "404": error_response("JOB_NOT_FOUND — no job with this id"),
+                        "503": error_response("DATABASE_ERROR — safe to retry"),
+                        "500": error_response("INTERNAL_ERROR — unexpected server error"),
                     },
                 }
             },
@@ -173,6 +234,7 @@ def _build_openapi_spec() -> dict:
                 "get": {
                     "summary": "Health check",
                     "operationId": "health",
+                    "security": [],
                     "responses": {
                         "200": {
                             "description": "OK",
@@ -180,7 +242,7 @@ def _build_openapi_spec() -> dict:
                                 "application/json": {
                                     "schema": {
                                         "type": "object",
-                                        "properties": {"status": {"type": "string"}},
+                                        "properties": {"status": {"type": "string", "example": "healthy"}},
                                     }
                                 }
                             },
