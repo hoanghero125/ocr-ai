@@ -179,3 +179,94 @@ async def test_invalid_request_body_returns_400(aws_resources):
     )
 
     assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["code"] == "VALIDATION_ERROR"
+    assert "message" in body
+
+
+@pytest.mark.asyncio
+async def test_ssrf_error_returns_code_and_message(aws_resources):
+    container = _make_container(aws_resources["table"], aws_resources["queue_url"])
+
+    from src.shared.exceptions import SSRFBlockedError
+
+    with patch("src.api.routes.validate_url", new_callable=AsyncMock, side_effect=SSRFBlockedError()):
+        response = await handle_api_event(
+            _post_event({"pdf_url": "https://internal.local/doc.pdf"}),
+            context=MagicMock(),
+            container=container,
+        )
+
+    assert response["statusCode"] == 400
+    body = json.loads(response["body"])
+    assert body["code"] == "URL_NOT_ALLOWED"
+    assert "message" in body
+
+
+@pytest.mark.asyncio
+async def test_dynamodb_failure_returns_503(aws_resources):
+    container = _make_container(aws_resources["table"], aws_resources["queue_url"])
+    container.get_repo.return_value.create = MagicMock(side_effect=Exception("DynamoDB timeout"))
+
+    with patch("src.api.routes.validate_url", new_callable=AsyncMock):
+        response = await handle_api_event(
+            _post_event({"pdf_url": "https://example.com/doc.pdf"}),
+            context=MagicMock(),
+            container=container,
+        )
+
+    assert response["statusCode"] == 503
+    body = json.loads(response["body"])
+    assert body["code"] == "DATABASE_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_sqs_failure_returns_503(aws_resources):
+    container = _make_container(aws_resources["table"], aws_resources["queue_url"])
+
+    with patch("src.api.routes.validate_url", new_callable=AsyncMock):
+        with patch("boto3.client") as mock_boto_client:
+            mock_sqs = MagicMock()
+            mock_sqs.send_message.side_effect = Exception("SQS unavailable")
+            mock_boto_client.return_value = mock_sqs
+
+            response = await handle_api_event(
+                _post_event({"pdf_url": "https://example.com/doc.pdf"}),
+                context=MagicMock(),
+                container=container,
+            )
+
+    assert response["statusCode"] == 503
+    body = json.loads(response["body"])
+    assert body["code"] == "QUEUE_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_404_returns_code_and_message(aws_resources):
+    container = _make_container(aws_resources["table"], aws_resources["queue_url"])
+
+    response = await handle_api_event(
+        {"httpMethod": "GET", "path": "/nonexistent"},
+        context=MagicMock(),
+        container=container,
+    )
+
+    assert response["statusCode"] == 404
+    body = json.loads(response["body"])
+    assert body["code"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_missing_token_returns_401(aws_resources):
+    container = _make_container(aws_resources["table"], aws_resources["queue_url"])
+
+    with patch.dict(os.environ, {"API_TOKEN": "secret"}):
+        response = await handle_api_event(
+            _post_event({"pdf_url": "https://example.com/doc.pdf"}),
+            context=MagicMock(),
+            container=container,
+        )
+
+    assert response["statusCode"] == 401
+    body = json.loads(response["body"])
+    assert body["code"] == "UNAUTHORIZED"
