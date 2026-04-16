@@ -52,6 +52,18 @@ app = FastAPI(
 )
 
 
+def _require_auth_or_401(http_request: Request) -> JSONResponse | None:
+    """Enforce Bearer auth when API_TOKEN is set (same behavior as Lambda handler)."""
+    expected = os.environ.get("API_TOKEN", "")
+    if not expected:
+        return None
+    auth_header = http_request.headers.get("authorization", "")
+    parts = auth_header.split(" ", 1)
+    if len(parts) != 2 or parts[0].lower() != "bearer" or parts[1] != expected:
+        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+    return None
+
+
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
@@ -63,6 +75,9 @@ async def process(http_request: Request, background_tasks: BackgroundTasks):
     Submit a PDF for processing.
     Same request/response shape as the production API.
     """
+    if (denied := _require_auth_or_401(http_request)) is not None:
+        return denied
+
     try:
         body_dict = await http_request.json()
         request = ProcessRequest.model_validate(body_dict)
@@ -116,8 +131,11 @@ async def process(http_request: Request, background_tasks: BackgroundTasks):
 
 
 @app.get("/jobs/{job_id}")
-async def get_job(job_id: str):
+async def get_job(job_id: str, http_request: Request):
     """Poll job status — reads directly from DynamoDB."""
+    if (denied := _require_auth_or_401(http_request)) is not None:
+        return denied
+
     try:
         item = _container.get_repo().get(job_id)
     except JobNotFoundError:
@@ -146,6 +164,9 @@ async def extract(http_request: Request):
     Process a PDF and return extracted fields directly (no job queue, no polling).
     Same request format as /process. Response matches EXAMPLE_RESPONSE format.
     """
+    if (denied := _require_auth_or_401(http_request)) is not None:
+        return denied
+
     try:
         body_dict = await http_request.json()
         request = ProcessRequest.model_validate(body_dict)
