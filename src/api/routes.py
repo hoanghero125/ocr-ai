@@ -5,6 +5,7 @@ import copy
 import dataclasses
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -67,6 +68,29 @@ def _build_openapi_spec() -> dict:
     components[root_name] = schema
     _rewrite_defs_to_components(components)
 
+    components["ErrorResponse"] = {
+        "type": "object",
+        "required": ["code", "message"],
+        "properties": {
+            "code": {
+                "type": "string",
+                "description": "Machine-readable error code",
+                "example": "VALIDATION_ERROR",
+            },
+            "message": {
+                "type": "string",
+                "description": "Human-readable error description",
+                "example": "pdf_url: field required",
+            },
+        },
+    }
+
+    error_ref = {"$ref": "#/components/schemas/ErrorResponse"}
+    error_response = lambda desc: {
+        "description": desc,
+        "content": {"application/json": {"schema": error_ref}},
+    }
+
     return {
         "openapi": "3.1.0",
         "info": {
@@ -75,9 +99,26 @@ def _build_openapi_spec() -> dict:
             "description": (
                 "PDF OCR extraction service powered by Mistral.\n\n"
                 "Submit a PDF with `POST /process` — returns a `job_id` immediately. "
-                "Poll `GET /jobs/{job_id}` (or use the `status_url` from the response) "
-                "until status is terminal (`completed`, `completed_with_errors`, `failed`). "
-                "Optionally provide a `callback_url` to receive one webhook POST when the job finishes."
+                "Poll `GET /jobs/{job_id}` until status is terminal "
+                "(`completed`, `completed_with_errors`, `failed`). "
+                "Optionally provide a `callback_url` to receive one webhook POST when the job finishes.\n\n"
+                "## Authentication\n\n"
+                "All endpoints except `/health`, `/docs`, `/openapi.json` require:\n\n"
+                "```\nAuthorization: Bearer <token>\n```\n\n"
+                "## Error codes\n\n"
+                "All errors return `{\"code\": \"...\", \"message\": \"...\"}` with these codes:\n\n"
+                "| Code | HTTP | Description |\n"
+                "|------|------|-------------|\n"
+                "| `VALIDATION_ERROR` | 400 | Request body failed schema validation (e.g. missing `pdf_url`) |\n"
+                "| `INVALID_JSON` | 400 | Request body is not valid JSON |\n"
+                "| `INVALID_URL` | 400 | `pdf_url` or `callback_url` is not a valid URL |\n"
+                "| `URL_NOT_ALLOWED` | 400 | URL resolves to a private/internal address (SSRF protection) |\n"
+                "| `UNAUTHORIZED` | 401 | Missing or invalid `Authorization: Bearer <token>` header |\n"
+                "| `JOB_NOT_FOUND` | 404 | No job exists with the given `job_id` |\n"
+                "| `NOT_FOUND` | 404 | Route does not exist |\n"
+                "| `DATABASE_ERROR` | 503 | DynamoDB is unavailable — safe to retry |\n"
+                "| `QUEUE_ERROR` | 503 | SQS is unavailable — safe to retry |\n"
+                "| `INTERNAL_ERROR` | 500 | Unexpected server error |\n"
             ),
         },
         "components": {
@@ -86,11 +127,11 @@ def _build_openapi_spec() -> dict:
                 "BearerAuth": {
                     "type": "http",
                     "scheme": "bearer",
-                    "bearerFormat": "API Token",
-                    "description": "Set `Authorization: Bearer <API_TOKEN>`.",
+                    "description": "API token — set via `API_TOKEN` env var on the server",
                 }
             },
         },
+        "security": [{"BearerAuth": []}],
         "paths": {
             "/process": {
                 "post": {
@@ -100,6 +141,7 @@ def _build_openapi_spec() -> dict:
                         "Returns **202** immediately. Processing runs asynchronously. "
                         "Use `status_url` or `GET /jobs/{job_id}` to poll for results."
                     ),
+                    "security": [{"BearerAuth": []}],
                     "requestBody": {
                         "required": True,
                         "content": {
@@ -127,8 +169,10 @@ def _build_openapi_spec() -> dict:
                                 }
                             },
                         },
-                        "400": {"description": "Validation error"},
-                        "401": {"description": "Unauthorized"},
+                        "400": error_response("VALIDATION_ERROR · INVALID_JSON · INVALID_URL · URL_NOT_ALLOWED"),
+                        "401": error_response("UNAUTHORIZED — missing or invalid Bearer token"),
+                        "503": error_response("DATABASE_ERROR · QUEUE_ERROR — safe to retry"),
+                        "500": error_response("INTERNAL_ERROR — unexpected server error"),
                     },
                 }
             },
@@ -140,6 +184,7 @@ def _build_openapi_spec() -> dict:
                         "Poll until `status` is terminal: `completed`, `completed_with_errors`, or `failed`. "
                         "When complete, `result_url` points to the full JSON result in MinIO."
                     ),
+                    "security": [{"BearerAuth": []}],
                     "parameters": [
                         {
                             "name": "job_id",
@@ -158,7 +203,10 @@ def _build_openapi_spec() -> dict:
                                         "type": "object",
                                         "properties": {
                                             "job_id": {"type": "string"},
-                                            "status": {"type": "string"},
+                                            "status": {
+                                                "type": "string",
+                                                "enum": ["queued", "processing", "completed", "completed_with_errors", "failed"],
+                                            },
                                             "result_url": {"type": "string", "nullable": True},
                                             "progress": {
                                                 "type": "object",
@@ -177,8 +225,10 @@ def _build_openapi_spec() -> dict:
                                 }
                             },
                         },
-                        "401": {"description": "Unauthorized"},
-                        "404": {"description": "Job not found"},
+                        "401": error_response("UNAUTHORIZED — missing or invalid Bearer token"),
+                        "404": error_response("JOB_NOT_FOUND — no job with this id"),
+                        "503": error_response("DATABASE_ERROR — safe to retry"),
+                        "500": error_response("INTERNAL_ERROR — unexpected server error"),
                     },
                 }
             },
@@ -186,6 +236,7 @@ def _build_openapi_spec() -> dict:
                 "get": {
                     "summary": "Health check",
                     "operationId": "health",
+                    "security": [],
                     "responses": {
                         "200": {
                             "description": "OK",
@@ -193,7 +244,7 @@ def _build_openapi_spec() -> dict:
                                 "application/json": {
                                     "schema": {
                                         "type": "object",
-                                        "properties": {"status": {"type": "string"}},
+                                        "properties": {"status": {"type": "string", "example": "healthy"}},
                                     }
                                 }
                             },
@@ -215,6 +266,20 @@ def _response(status_code: int, body: dict) -> dict:
 
 def _error(status_code: int, code: str, message: str) -> dict:
     return _response(status_code, {"code": code, "message": message})
+
+
+def _log_request(method: str, path: str, result: dict, t0: float) -> None:
+    ms = int((time.monotonic() - t0) * 1000)
+    status = result["statusCode"]
+    extra: dict = {"method": method, "path": path, "status": status, "duration_ms": ms}
+    if status >= 400:
+        try:
+            body = json.loads(result.get("body", "{}"))
+            extra["error_code"] = body.get("code")
+            extra["error_message"] = body.get("message")
+        except Exception:
+            pass
+    _logger.info("request", extra=extra)
 
 
 def _html_response(status_code: int, html: str) -> dict:
@@ -248,6 +313,7 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
     try:
         method = event.get("httpMethod") or event.get("requestContext", {}).get("http", {}).get("method", "")
         path = event.get("path") or event.get("rawPath", "/")
+        t0 = time.monotonic()
 
         if method == "GET" and path == "/health":
             return _response(200, {"status": "healthy"})
@@ -261,20 +327,30 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
         # Auth required for all other endpoints
         if path not in _PUBLIC_PATHS:
             if (denied := _check_auth(event)) is not None:
+                _log_request(method, path, denied, t0)
                 return denied
 
         if method == "POST" and path == "/process":
-            return await _handle_process(event, container)
-
-        if method == "GET" and path.startswith("/jobs/"):
+            result = await _handle_process(event, container)
+        elif method == "GET" and path.startswith("/jobs/"):
             job_id = path.split("/jobs/", 1)[1].strip("/")
-            return await _handle_get_job(job_id, container)
+            result = await _handle_get_job(job_id, container)
+        else:
+            result = _error(404, "NOT_FOUND", f"Route {method} {path} not found")
 
-        return _error(404, "NOT_FOUND", f"Route {method} {path} not found")
+        _log_request(method, path, result, t0)
+        return result
 
     except Exception as exc:
         _logger.error("unhandled_error", extra={"error": str(exc)}, exc_info=True)
-        return _error(500, "INTERNAL_ERROR", "An unexpected error occurred")
+        result = _error(500, "INTERNAL_ERROR", str(exc))
+        _log_request(
+            method if "method" in dir() else "?",
+            path if "path" in dir() else "/",
+            result,
+            t0 if "t0" in dir() else time.monotonic(),
+        )
+        return result
 
 
 async def _handle_process(event: dict, container: object) -> dict:
@@ -368,6 +444,8 @@ async def _handle_get_job(job_id: str, container: object) -> dict:
             "processed_pages": progress_raw.get("processed_pages", 0),
             "current_step": progress_raw.get("current_step", ""),
         }
+
+    _logger.info("job_status_queried", extra={"job_id": job_id, "status": item["status"]})
 
     return _response(
         200,

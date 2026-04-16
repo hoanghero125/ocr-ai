@@ -34,6 +34,8 @@ get_settings.cache_clear()
 _container = Container(get_settings())
 
 # ── FastAPI ───────────────────────────────────────────────────────────────────
+import time as _time
+
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -41,9 +43,12 @@ from pydantic import ValidationError
 from src.api.schemas import ProcessRequest, ProcessResponse
 from src.models.job import FieldInstruction, JobPayload
 from src.shared.exceptions import JobNotFoundError, SSRFBlockedError, ValidationError as OCRValidationError
+from src.shared.logging import get_logger
 from src.shared.url_validator import validate_url
 from src.mistral.ocr import OCRStage
 from src.mistral.extraction import ExtractionStage
+
+_log = get_logger(__name__)
 
 app = FastAPI(
     title="OCR Local (prod config)",
@@ -52,16 +57,39 @@ app = FastAPI(
 )
 
 
-def _require_auth_or_401(http_request: Request) -> JSONResponse | None:
-    """Enforce Bearer auth when API_TOKEN is set (same behavior as Lambda handler)."""
-    expected = os.environ.get("API_TOKEN", "")
-    if not expected:
-        return None
-    auth_header = http_request.headers.get("authorization", "")
-    parts = auth_header.split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer" or parts[1] != expected:
-        return JSONResponse(status_code=401, content={"error": "Unauthorized"})
-    return None
+@app.middleware("http")
+async def _log_requests(request: Request, call_next):
+    t0 = _time.monotonic()
+    response = await call_next(request)
+    ms = int((_time.monotonic() - t0) * 1000)
+    _log.info(
+        "request",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "duration_ms": ms,
+        },
+    )
+    return response
+
+
+def _err(status: int, code: str, message: str) -> JSONResponse:
+    _log.warning("error_response", extra={"status": status, "code": code, "message": message})
+    return JSONResponse(status_code=status, content={"code": code, "message": message})
+
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
+    _log.error(
+        "unhandled_error",
+        extra={"method": request.method, "path": request.url.path, "error": str(exc)},
+        exc_info=True,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"code": "INTERNAL_ERROR", "message": str(exc)},
+    )
 
 
 @app.get("/health")
@@ -71,25 +99,23 @@ async def health():
 
 @app.post("/process", status_code=202)
 async def process(http_request: Request, background_tasks: BackgroundTasks):
-    """
-    Submit a PDF for processing.
-    Same request/response shape as the production API.
-    """
-    if (denied := _require_auth_or_401(http_request)) is not None:
-        return denied
-
+    """Submit a PDF for async processing — returns job_id immediately."""
     try:
         body_dict = await http_request.json()
         request = ProcessRequest.model_validate(body_dict)
-    except (json.JSONDecodeError, ValidationError) as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except json.JSONDecodeError:
+        return _err(400, "INVALID_JSON", "Request body is not valid JSON")
+    except ValidationError as exc:
+        return _err(400, "VALIDATION_ERROR", str(exc))
 
     try:
         await validate_url(request.pdf_url)
         if request.callback_url:
             await validate_url(request.callback_url)
-    except (SSRFBlockedError, OCRValidationError) as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except SSRFBlockedError:
+        return _err(400, "URL_NOT_ALLOWED", "pdf_url or callback_url resolves to a disallowed address")
+    except OCRValidationError as exc:
+        return _err(400, "INVALID_URL", str(exc))
 
     job_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc)
@@ -113,12 +139,14 @@ async def process(http_request: Request, background_tasks: BackgroundTasks):
         metadata=request.metadata.model_dump() if request.metadata else {},
     )
 
-    # Create the job record in DynamoDB
-    repo = _container.get_repo()
-    repo.create(job_id, dataclasses.asdict(payload))
+    try:
+        _container.get_repo().create(job_id, dataclasses.asdict(payload))
+    except Exception as exc:
+        return _err(503, "DATABASE_ERROR", f"Failed to create job record: {exc}")
 
-    # Process inline (no SQS) — runs after the response is sent
     background_tasks.add_task(_run_job, payload)
+
+    _log.info("job_received", extra={"job_id": job_id})
 
     status_url = f"http://localhost:8000/jobs/{job_id}"
     return ProcessResponse(
@@ -139,7 +167,11 @@ async def get_job(job_id: str, http_request: Request):
     try:
         item = _container.get_repo().get(job_id)
     except JobNotFoundError:
-        return JSONResponse(status_code=404, content={"error": f"Job {job_id} not found"})
+        return _err(404, "JOB_NOT_FOUND", f"Job {job_id} not found")
+    except Exception as exc:
+        return _err(503, "DATABASE_ERROR", f"Failed to retrieve job: {exc}")
+
+    _log.info("job_status_queried", extra={"job_id": job_id, "status": item["status"]})
 
     return {
         "job_id": item["job_id"],
@@ -170,13 +202,17 @@ async def extract(http_request: Request):
     try:
         body_dict = await http_request.json()
         request = ProcessRequest.model_validate(body_dict)
-    except (json.JSONDecodeError, ValidationError) as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except json.JSONDecodeError:
+        return _err(400, "INVALID_JSON", "Request body is not valid JSON")
+    except ValidationError as exc:
+        return _err(400, "VALIDATION_ERROR", str(exc))
 
     try:
         await validate_url(request.pdf_url)
-    except (SSRFBlockedError, OCRValidationError) as exc:
-        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except SSRFBlockedError:
+        return _err(400, "URL_NOT_ALLOWED", "pdf_url resolves to a disallowed address")
+    except OCRValidationError as exc:
+        return _err(400, "INVALID_URL", str(exc))
 
     settings = _container.settings
     field_instructions = [
@@ -189,7 +225,6 @@ async def extract(http_request: Request):
         for fi in request.field_instructions
     ]
 
-    # Build OCR + extraction stages directly (same as Container internals)
     from src.mistral.client import MistralClient
     client = MistralClient(
         api_key=settings.mistral.api_key,
@@ -209,7 +244,11 @@ async def extract(http_request: Request):
 
     job_id = str(uuid.uuid4())
 
-    pages = await ocr_stage.run(pdf_url=request.pdf_url)
+    try:
+        pages = await ocr_stage.run(pdf_url=request.pdf_url)
+    except Exception as exc:
+        return _err(502, "OCR_FAILED", f"OCR stage failed: {exc}")
+
     if field_instructions:
         pages = await extraction_stage.run(
             pages=pages,
