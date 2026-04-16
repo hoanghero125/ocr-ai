@@ -12,8 +12,20 @@ from src.mistral.ocr import OCRStage
 from src.models.job import JobPayload, JobStatus
 from src.models.result import JobProgress, OCRResult, PageResult
 from src.pipeline.continuation import ContinuationTrigger
+from src.shared.codes import CHECKPOINT_ERROR, JOB_INTERNAL_ERROR, OCR_FAILED, RATE_LIMIT_ERROR
 from src.shared.config import Settings
+from src.shared.exceptions import CheckpointError, MistralAPIError, RateLimitTimeoutError
 from src.shared.logging import get_logger
+
+
+def _error_code_for(exc: Exception) -> int:
+    if isinstance(exc, RateLimitTimeoutError):
+        return RATE_LIMIT_ERROR
+    if isinstance(exc, CheckpointError):
+        return CHECKPOINT_ERROR
+    if isinstance(exc, MistralAPIError):
+        return OCR_FAILED
+    return JOB_INTERNAL_ERROR
 
 
 class OCRProcessor:
@@ -193,14 +205,15 @@ class OCRProcessor:
                     log.warning("webhook_send_error", extra={"error": str(webhook_exc)})
 
         except Exception as exc:
-            log.error("processor_failed", extra={"error": str(exc)}, exc_info=True)
-            self._repo.update_status(job_id, JobStatus.FAILED, error=str(exc))
+            error_code = _error_code_for(exc)
+            log.error("processor_failed", extra={"error_code": error_code, "error": str(exc)}, exc_info=True)
+            self._repo.update_status(job_id, JobStatus.FAILED, error=str(exc), error_code=error_code)
 
             if payload.callback_url:
                 try:
                     await self._webhook.send(
                         payload.callback_url,
-                        {"job_id": job_id, "status": "failed", "error": str(exc)},
+                        {"job_id": job_id, "status": "failed", "error_code": error_code, "error": str(exc)},
                         job_id=job_id,
                     )
                 except Exception as webhook_exc:

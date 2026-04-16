@@ -42,6 +42,7 @@ from pydantic import ValidationError
 
 from src.api.schemas import ProcessRequest, ProcessResponse
 from src.models.job import FieldInstruction, JobPayload
+from src.shared import codes
 from src.shared.exceptions import JobNotFoundError, SSRFBlockedError, ValidationError as OCRValidationError
 from src.shared.logging import get_logger
 from src.shared.url_validator import validate_url
@@ -74,7 +75,7 @@ async def _log_requests(request: Request, call_next):
     return response
 
 
-def _err(status: int, code: str, message: str) -> JSONResponse:
+def _err(status: int, code: int, message: str) -> JSONResponse:
     _log.warning("error_response", extra={"status": status, "code": code, "message": message})
     return JSONResponse(status_code=status, content={"code": code, "message": message})
 
@@ -87,7 +88,7 @@ def _require_auth_or_401(http_request: Request) -> JSONResponse | None:
     auth_header = http_request.headers.get("authorization", "")
     parts = auth_header.split(" ", 1)
     if len(parts) != 2 or parts[0].lower() != "bearer" or parts[1] != expected:
-        return _err(401, "UNAUTHORIZED", "Missing or invalid Bearer token")
+        return _err(401, codes.UNAUTHORIZED, "Missing or invalid Bearer token")
     return None
 
 
@@ -95,12 +96,12 @@ def _require_auth_or_401(http_request: Request) -> JSONResponse | None:
 async def _unhandled(request: Request, exc: Exception) -> JSONResponse:
     _log.error(
         "unhandled_error",
-        extra={"method": request.method, "path": request.url.path, "error": str(exc)},
+        extra={"code": codes.INTERNAL_ERROR, "method": request.method, "path": request.url.path, "error": str(exc)},
         exc_info=True,
     )
     return JSONResponse(
         status_code=500,
-        content={"code": "INTERNAL_ERROR", "message": str(exc)},
+        content={"code": codes.INTERNAL_ERROR, "message": str(exc)},
     )
 
 
@@ -119,18 +120,18 @@ async def process(http_request: Request, background_tasks: BackgroundTasks):
         body_dict = await http_request.json()
         request = ProcessRequest.model_validate(body_dict)
     except json.JSONDecodeError:
-        return _err(400, "INVALID_JSON", "Request body is not valid JSON")
+        return _err(400, codes.INVALID_JSON, "Request body is not valid JSON")
     except ValidationError as exc:
-        return _err(400, "VALIDATION_ERROR", str(exc))
+        return _err(400, codes.VALIDATION_ERROR, str(exc))
 
     try:
         await validate_url(request.pdf_url)
         if request.callback_url:
             await validate_url(request.callback_url)
     except SSRFBlockedError:
-        return _err(400, "URL_NOT_ALLOWED", "pdf_url or callback_url resolves to a disallowed address")
+        return _err(400, codes.URL_NOT_ALLOWED, "pdf_url or callback_url resolves to a disallowed address")
     except OCRValidationError as exc:
-        return _err(400, "INVALID_URL", str(exc))
+        return _err(400, codes.INVALID_URL, str(exc))
 
     job_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc)
@@ -157,13 +158,14 @@ async def process(http_request: Request, background_tasks: BackgroundTasks):
     try:
         _container.get_repo().create(job_id, dataclasses.asdict(payload))
     except Exception as exc:
-        return _err(503, "DATABASE_ERROR", f"Failed to create job record: {exc}")
+        return _err(503, codes.DATABASE_ERROR, f"Failed to create job record: {exc}")
 
     background_tasks.add_task(_run_job, payload)
 
     _log.info("job_received", extra={"job_id": job_id})
 
-    status_url = f"http://localhost:8000/jobs/{job_id}"
+    base_url = _container.settings.aws.http_api_base_url.rstrip("/")
+    status_url = f"{base_url}/jobs/{job_id}"
     return ProcessResponse(
         job_id=job_id,
         status="queued",
@@ -182,17 +184,20 @@ async def get_job(job_id: str, http_request: Request):
     try:
         item = _container.get_repo().get(job_id)
     except JobNotFoundError:
-        return _err(404, "JOB_NOT_FOUND", f"Job {job_id} not found")
+        return _err(404, codes.JOB_NOT_FOUND, f"Job {job_id} not found")
     except Exception as exc:
-        return _err(503, "DATABASE_ERROR", f"Failed to retrieve job: {exc}")
+        return _err(503, codes.DATABASE_ERROR, f"Failed to retrieve job: {exc}")
 
     _log.info("job_status_queried", extra={"job_id": job_id, "status": item["status"]})
 
+    error_code = item.get("error_code")
     return {
+        "code": error_code if error_code is not None else codes.SUCCESS,
         "job_id": item["job_id"],
         "status": item["status"],
         "result_url": item.get("result_url"),
         "progress": item.get("progress"),
+        "error_code": error_code,
         "error": item.get("error"),
         "created_at": item["created_at"],
         "updated_at": item["updated_at"],
@@ -218,16 +223,16 @@ async def extract(http_request: Request):
         body_dict = await http_request.json()
         request = ProcessRequest.model_validate(body_dict)
     except json.JSONDecodeError:
-        return _err(400, "INVALID_JSON", "Request body is not valid JSON")
+        return _err(400, codes.INVALID_JSON, "Request body is not valid JSON")
     except ValidationError as exc:
-        return _err(400, "VALIDATION_ERROR", str(exc))
+        return _err(400, codes.VALIDATION_ERROR, str(exc))
 
     try:
         await validate_url(request.pdf_url)
     except SSRFBlockedError:
-        return _err(400, "URL_NOT_ALLOWED", "pdf_url resolves to a disallowed address")
+        return _err(400, codes.URL_NOT_ALLOWED, "pdf_url resolves to a disallowed address")
     except OCRValidationError as exc:
-        return _err(400, "INVALID_URL", str(exc))
+        return _err(400, codes.INVALID_URL, str(exc))
 
     settings = _container.settings
     field_instructions = [
@@ -262,7 +267,7 @@ async def extract(http_request: Request):
     try:
         pages = await ocr_stage.run(pdf_url=request.pdf_url)
     except Exception as exc:
-        return _err(502, "OCR_FAILED", f"OCR stage failed: {exc}")
+        return _err(502, codes.OCR_FAILED, f"OCR stage failed: {exc}")
 
     if field_instructions:
         pages = await extraction_stage.run(

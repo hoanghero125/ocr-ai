@@ -101,6 +101,7 @@ class ProcessRequest(BaseModel):
 
 
 class ProcessResponse(BaseModel):
+    code: int = 0
     job_id: str
     status: str
     status_url: str
@@ -115,10 +116,12 @@ class ProgressSchema(BaseModel):
 
 
 class StatusResponse(BaseModel):
+    code: int = 0
     job_id: str
     status: str
     progress: ProgressSchema | None = None
     result_url: str | None = None
+    error_code: int | None = None
     error: str | None = None
     created_at: str
     updated_at: str

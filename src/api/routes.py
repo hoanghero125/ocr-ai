@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from src.api.schemas import ProcessRequest, ProcessResponse, StatusResponse
 from src.models.job import FieldInstruction, JobPayload
+from src.shared import codes
 from src.shared.exceptions import JobNotFoundError, SSRFBlockedError, ValidationError as OCRValidationError
 from src.shared.logging import get_logger
 from src.shared.url_validator import validate_url
@@ -105,20 +106,28 @@ def _build_openapi_spec() -> dict:
                 "## Authentication\n\n"
                 "All endpoints except `/health`, `/docs`, `/openapi.json` require:\n\n"
                 "```\nAuthorization: Bearer <token>\n```\n\n"
-                "## Error codes\n\n"
-                "All errors return `{\"code\": \"...\", \"message\": \"...\"}` with these codes:\n\n"
-                "| Code | HTTP | Description |\n"
-                "|------|------|-------------|\n"
-                "| `VALIDATION_ERROR` | 400 | Request body failed schema validation (e.g. missing `pdf_url`) |\n"
-                "| `INVALID_JSON` | 400 | Request body is not valid JSON |\n"
-                "| `INVALID_URL` | 400 | `pdf_url` or `callback_url` is not a valid URL |\n"
-                "| `URL_NOT_ALLOWED` | 400 | URL resolves to a private/internal address (SSRF protection) |\n"
-                "| `UNAUTHORIZED` | 401 | Missing or invalid `Authorization: Bearer <token>` header |\n"
-                "| `JOB_NOT_FOUND` | 404 | No job exists with the given `job_id` |\n"
-                "| `NOT_FOUND` | 404 | Route does not exist |\n"
-                "| `DATABASE_ERROR` | 503 | DynamoDB is unavailable — safe to retry |\n"
-                "| `QUEUE_ERROR` | 503 | SQS is unavailable — safe to retry |\n"
-                "| `INTERNAL_ERROR` | 500 | Unexpected server error |\n"
+                "## Response codes\n\n"
+                "Mọi response đều có field `code`. `code = 0` là thành công.\n\n"
+                "### API errors — trong response body khi HTTP status >= 400\n\n"
+                "| `code` | HTTP | Mô tả |\n"
+                "|--------|------|-------|\n"
+                "| `1001` | 400 | VALIDATION_ERROR — Request body sai schema (thiếu `pdf_url`, v.v.) |\n"
+                "| `1002` | 400 | INVALID_JSON — Body không phải JSON hợp lệ |\n"
+                "| `1003` | 400 | INVALID_URL — `pdf_url` / `callback_url` không phải URL hợp lệ |\n"
+                "| `1004` | 400 | URL_NOT_ALLOWED — URL trỏ vào địa chỉ nội bộ (SSRF) |\n"
+                "| `2001` | 401 | UNAUTHORIZED — Thiếu hoặc sai `Authorization: Bearer <token>` |\n"
+                "| `3001` | 404 | JOB_NOT_FOUND — Không tìm thấy job với `job_id` đã cho |\n"
+                "| `3002` | 404 | NOT_FOUND — Route không tồn tại |\n"
+                "| `5001` | 503 | DATABASE_ERROR — DynamoDB không phản hồi — retry được |\n"
+                "| `5002` | 503 | QUEUE_ERROR — SQS không phản hồi — retry được |\n"
+                "| `5003` | 500 | INTERNAL_ERROR — Lỗi không xác định ở tầng API |\n\n"
+                "### Job pipeline errors — trong `GET /jobs/{job_id}` khi `status = failed`\n\n"
+                "| `error_code` | Mô tả |\n"
+                "|--------------|-------|\n"
+                "| `6001` | OCR_FAILED — Mistral OCR API lỗi |\n"
+                "| `6002` | RATE_LIMIT_ERROR — Chờ rate limit quá lâu |\n"
+                "| `6003` | CHECKPOINT_ERROR — Lỗi checkpoint hoặc vượt max continuations |\n"
+                "| `6004` | JOB_INTERNAL_ERROR — Lỗi không xác định trong pipeline |\n"
             ),
         },
         "components": {
@@ -159,6 +168,7 @@ def _build_openapi_spec() -> dict:
                                     "schema": {
                                         "type": "object",
                                         "properties": {
+                                            "code": {"type": "integer", "example": 0, "description": "0 = success"},
                                             "job_id": {"type": "string", "format": "uuid"},
                                             "status": {"type": "string", "example": "queued"},
                                             "status_url": {"type": "string"},
@@ -202,6 +212,7 @@ def _build_openapi_spec() -> dict:
                                     "schema": {
                                         "type": "object",
                                         "properties": {
+                                            "code": {"type": "integer", "example": 0, "description": "0 = success; 6001–6004 = job pipeline error (see error_code)"},
                                             "job_id": {"type": "string"},
                                             "status": {
                                                 "type": "string",
@@ -217,7 +228,13 @@ def _build_openapi_spec() -> dict:
                                                     "current_step": {"type": "string"},
                                                 },
                                             },
-                                            "error": {"type": "string", "nullable": True},
+                                            "error_code": {
+                                                "type": "string",
+                                                "nullable": True,
+                                                "description": "Set when status=failed. Values: OCR_FAILED, RATE_LIMIT_ERROR, CHECKPOINT_ERROR, INTERNAL_ERROR",
+                                                "example": "OCR_FAILED",
+                                            },
+                                            "error": {"type": "string", "nullable": True, "description": "Human-readable error detail"},
                                             "created_at": {"type": "string"},
                                             "updated_at": {"type": "string"},
                                         },
@@ -264,7 +281,7 @@ def _response(status_code: int, body: dict) -> dict:
     }
 
 
-def _error(status_code: int, code: str, message: str) -> dict:
+def _error(status_code: int, code: int, message: str) -> dict:
     return _response(status_code, {"code": code, "message": message})
 
 
@@ -304,7 +321,7 @@ def _check_auth(event: dict) -> dict | None:
     auth_header = headers.get("authorization") or headers.get("Authorization") or ""
     parts = auth_header.split(" ", 1)
     if len(parts) != 2 or parts[0].lower() != "bearer" or parts[1] != expected:
-        return _error(401, "UNAUTHORIZED", "Missing or invalid Bearer token")
+        return _error(401, codes.UNAUTHORIZED, "Missing or invalid Bearer token")
     return None
 
 
@@ -336,14 +353,14 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
             job_id = path.split("/jobs/", 1)[1].strip("/")
             result = await _handle_get_job(job_id, container)
         else:
-            result = _error(404, "NOT_FOUND", f"Route {method} {path} not found")
+            result = _error(404, codes.NOT_FOUND, f"Route {method} {path} not found")
 
         _log_request(method, path, result, t0)
         return result
 
     except Exception as exc:
-        _logger.error("unhandled_error", extra={"error": str(exc)}, exc_info=True)
-        result = _error(500, "INTERNAL_ERROR", str(exc))
+        _logger.error("unhandled_error", extra={"code": codes.INTERNAL_ERROR, "error": str(exc)}, exc_info=True)
+        result = _error(500, codes.INTERNAL_ERROR, str(exc))
         _log_request(
             method if "method" in dir() else "?",
             path if "path" in dir() else "/",
@@ -359,18 +376,18 @@ async def _handle_process(event: dict, container: object) -> dict:
         body_dict = json.loads(raw_body)
         request = ProcessRequest.model_validate(body_dict)
     except json.JSONDecodeError:
-        return _error(400, "INVALID_JSON", "Request body is not valid JSON")
+        return _error(400, codes.INVALID_JSON, "Request body is not valid JSON")
     except ValidationError as exc:
-        return _error(400, "VALIDATION_ERROR", str(exc))
+        return _error(400, codes.VALIDATION_ERROR, str(exc))
 
     try:
         await validate_url(request.pdf_url)
         if request.callback_url:
             await validate_url(request.callback_url)
     except SSRFBlockedError:
-        return _error(400, "URL_NOT_ALLOWED", "pdf_url or callback_url resolves to a disallowed address")
+        return _error(400, codes.URL_NOT_ALLOWED, "pdf_url or callback_url resolves to a disallowed address")
     except OCRValidationError as exc:
-        return _error(400, "INVALID_URL", str(exc))
+        return _error(400, codes.INVALID_URL, str(exc))
 
     job_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc)
@@ -397,8 +414,8 @@ async def _handle_process(event: dict, container: object) -> dict:
         repo = container.get_repo()
         repo.create(job_id, dataclasses.asdict(payload))
     except Exception as exc:
-        _logger.error("dynamodb_create_failed", extra={"job_id": job_id, "error": str(exc)}, exc_info=True)
-        return _error(503, "DATABASE_ERROR", "Failed to create job record — please retry")
+        _logger.error("dynamodb_create_failed", extra={"code": codes.DATABASE_ERROR, "job_id": job_id, "error": str(exc)}, exc_info=True)
+        return _error(503, codes.DATABASE_ERROR, "Failed to create job record — please retry")
 
     try:
         sqs = boto3.client("sqs", region_name=container.settings.aws.region)
@@ -407,8 +424,8 @@ async def _handle_process(event: dict, container: object) -> dict:
             MessageBody=json.dumps(dataclasses.asdict(payload)),
         )
     except Exception as exc:
-        _logger.error("sqs_send_failed", extra={"job_id": job_id, "error": str(exc)}, exc_info=True)
-        return _error(503, "QUEUE_ERROR", "Failed to queue job — please retry")
+        _logger.error("sqs_send_failed", extra={"code": codes.QUEUE_ERROR, "job_id": job_id, "error": str(exc)}, exc_info=True)
+        return _error(503, codes.QUEUE_ERROR, "Failed to queue job — please retry")
 
     base_url = container.settings.aws.http_api_base_url.rstrip("/")
     status_url = f"{base_url}/jobs/{job_id}"
@@ -431,10 +448,10 @@ async def _handle_get_job(job_id: str, container: object) -> dict:
     try:
         item = container.get_repo().get(job_id)
     except JobNotFoundError:
-        return _error(404, "JOB_NOT_FOUND", f"Job {job_id} not found")
+        return _error(404, codes.JOB_NOT_FOUND, f"Job {job_id} not found")
     except Exception as exc:
-        _logger.error("dynamodb_get_failed", extra={"job_id": job_id, "error": str(exc)}, exc_info=True)
-        return _error(503, "DATABASE_ERROR", "Failed to retrieve job — please retry")
+        _logger.error("dynamodb_get_failed", extra={"code": codes.DATABASE_ERROR, "job_id": job_id, "error": str(exc)}, exc_info=True)
+        return _error(503, codes.DATABASE_ERROR, "Failed to retrieve job — please retry")
 
     progress_raw = item.get("progress")
     progress = None
@@ -447,13 +464,16 @@ async def _handle_get_job(job_id: str, container: object) -> dict:
 
     _logger.info("job_status_queried", extra={"job_id": job_id, "status": item["status"]})
 
+    error_code = item.get("error_code")
     return _response(
         200,
         StatusResponse(
+            code=error_code if error_code is not None else codes.SUCCESS,
             job_id=item["job_id"],
             status=item["status"],
             progress=progress,
             result_url=item.get("result_url"),
+            error_code=error_code,
             error=item.get("error"),
             created_at=item["created_at"],
             updated_at=item["updated_at"],
