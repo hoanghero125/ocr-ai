@@ -80,7 +80,17 @@ def _build_openapi_spec() -> dict:
                 "Optionally provide a `callback_url` to receive one webhook POST when the job finishes."
             ),
         },
-        "components": {"schemas": components},
+        "components": {
+            "schemas": components,
+            "securitySchemes": {
+                "BearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "bearerFormat": "API Token",
+                    "description": "Set `Authorization: Bearer <API_TOKEN>`.",
+                }
+            },
+        },
         "paths": {
             "/process": {
                 "post": {
@@ -98,6 +108,7 @@ def _build_openapi_spec() -> dict:
                             }
                         },
                     },
+                    "security": [{"BearerAuth": []}],
                     "responses": {
                         "202": {
                             "description": "Job accepted",
@@ -117,6 +128,7 @@ def _build_openapi_spec() -> dict:
                             },
                         },
                         "400": {"description": "Validation error"},
+                        "401": {"description": "Unauthorized"},
                     },
                 }
             },
@@ -136,6 +148,7 @@ def _build_openapi_spec() -> dict:
                             "schema": {"type": "string", "format": "uuid"},
                         }
                     ],
+                    "security": [{"BearerAuth": []}],
                     "responses": {
                         "200": {
                             "description": "Job found",
@@ -164,6 +177,7 @@ def _build_openapi_spec() -> dict:
                                 }
                             },
                         },
+                        "401": {"description": "Unauthorized"},
                         "404": {"description": "Job not found"},
                     },
                 }

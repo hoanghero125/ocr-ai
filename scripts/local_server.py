@@ -23,15 +23,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# ── Load .env ─────────────────────────────────────────────────────────────────
-env_path = PROJECT_ROOT / ".env"
-if env_path.exists():
-    from dotenv import load_dotenv
-    load_dotenv(env_path)
-else:
-    print("[local] No .env found — copy .env.example to .env and fill in credentials")
-    sys.exit(1)
-
+# ── Config: Docker Compose / shell inject env vars (same keys as Lambda). ─────
 os.environ.setdefault("ENVIRONMENT", "local")
 
 # ── Build Container (same wiring as Lambda cold start) ────────────────────────

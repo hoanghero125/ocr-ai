@@ -1,6 +1,7 @@
 """JobRepository — all DynamoDB operations for job state."""
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any
 
 from boto3.dynamodb.conditions import Attr
@@ -20,6 +21,24 @@ def _ttl_timestamp() -> int:
     return int((datetime.now(tz=timezone.utc) + timedelta(days=_TTL_DAYS)).timestamp())
 
 
+def _to_dynamodb_value(value: Any) -> Any:
+    """Convert Python values into boto3 DynamoDB-safe values recursively."""
+    if value is None or isinstance(value, (str, bytes, bool, int, Decimal)):
+        return value
+    if isinstance(value, float):
+        # boto3 DynamoDB serializer rejects float; Decimal is required for Number.
+        return Decimal(str(value))
+    if isinstance(value, list):
+        return [_to_dynamodb_value(v) for v in value]
+    if isinstance(value, tuple):
+        return [_to_dynamodb_value(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _to_dynamodb_value(v) for k, v in value.items()}
+    if isinstance(value, set):
+        return {_to_dynamodb_value(v) for v in value}
+    return value
+
+
 class JobRepository:
     def __init__(self, table: Any) -> None:
         """
@@ -35,7 +54,7 @@ class JobRepository:
             Item={
                 "job_id": job_id,
                 "status": JobStatus.QUEUED.value,
-                "payload": payload_dict,
+                "payload": _to_dynamodb_value(payload_dict),
                 "progress": None,
                 "checkpoint": None,
                 "result_url": None,
@@ -66,7 +85,7 @@ class JobRepository:
         for key, value in extra.items():
             placeholder = f":extra_{key}"
             expressions.append(f"{key} = {placeholder}")
-            values[placeholder] = value
+            values[placeholder] = _to_dynamodb_value(value)
 
         self._table.update_item(
             Key={"job_id": job_id},
@@ -81,11 +100,11 @@ class JobRepository:
             Key={"job_id": job_id},
             UpdateExpression="SET progress = :progress, updated_at = :updated_at",
             ExpressionAttributeValues={
-                ":progress": {
+                    ":progress": _to_dynamodb_value({
                     "total_pages": progress.total_pages,
                     "processed_pages": progress.processed_pages,
                     "current_step": progress.current_step,
-                },
+                    }),
                 ":updated_at": _now_iso(),
             },
         )
@@ -112,7 +131,7 @@ class JobRepository:
                 ),
                 ConditionExpression=Attr("idempotency_key").not_exists(),
                 ExpressionAttributeValues={
-                    ":checkpoint": checkpoint_data,
+                    ":checkpoint": _to_dynamodb_value(checkpoint_data),
                     ":ikey": idempotency_key,
                     ":updated_at": _now_iso(),
                 },
@@ -153,7 +172,7 @@ class JobRepository:
                     | Attr("extraction_idempotency_key").lt(idempotency_key)
                 ),
                 ExpressionAttributeValues={
-                    ":checkpoint": checkpoint_data,
+                    ":checkpoint": _to_dynamodb_value(checkpoint_data),
                     ":ikey": idempotency_key,
                     ":updated_at": _now_iso(),
                 },

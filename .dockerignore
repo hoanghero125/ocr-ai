@@ -11,6 +11,5 @@ __pycache__
 htmlcov
 tests
 docs
-scripts
 terraform
 requirements-dev.txt

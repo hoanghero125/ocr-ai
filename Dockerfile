@@ -1,13 +1,24 @@
-FROM public.ecr.aws/lambda/python:3.11
+FROM python:3.11-slim
 
-# Install production dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
-# Copy application source
-COPY src/ ${LAMBDA_TASK_ROOT}/src/
+WORKDIR /app
 
-# Default handler — overridden per-function by image_config.command in Terraform:
-#   api    → src.lambda_handler.api_gateway_handler
-#   worker → src.lambda_handler.worker_handler
-CMD ["src.lambda_handler.handler"]
+# System deps kept minimal for faster, smaller image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install app dependencies first for better layer caching.
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Copy source code.
+COPY src /app/src
+COPY scripts /app/scripts
+
+EXPOSE 8000
+
+# Run FastAPI app for Ubuntu/VPS deployment.
+CMD ["uvicorn", "scripts.local_server:app", "--host", "0.0.0.0", "--port", "8000"]
