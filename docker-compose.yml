@@ -27,7 +27,7 @@ services:
       OCR_JOB_QUEUE_URL: ${OCR_JOB_QUEUE_URL:-https://sqs.ap-southeast-1.amazonaws.com/272180850981/ocr_test}
 
       # MinIO (S3-compatible API)
-      MINIO_URL: ${MINIO_URL:-https://minio.digeni.vn}
+      MINIO_URL: ${MINIO_URL:-https://minioapi.digeni.vn}
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-admin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-password123}
       MINIO_BUCKET: ${MINIO_BUCKET:-mistral-ai}

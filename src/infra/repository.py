@@ -75,17 +75,19 @@ class JobRepository:
 
     def update_status(self, job_id: str, status: JobStatus, **extra: Any) -> None:
         """Update job status plus any extra fields (result_url, error, etc.)."""
-        expressions = ["#st = :status", "updated_at = :updated_at"]
-        names = {"#st": "status"}
+        expressions = ["#st = :status", "#updated_at = :updated_at"]
+        names = {"#st": "status", "#updated_at": "updated_at"}
         values: dict[str, Any] = {
             ":status": status.value,
             ":updated_at": _now_iso(),
         }
 
         for key, value in extra.items():
-            placeholder = f":extra_{key}"
-            expressions.append(f"{key} = {placeholder}")
-            values[placeholder] = _to_dynamodb_value(value)
+            name_placeholder = f"#extra_{key}"
+            value_placeholder = f":extra_{key}"
+            names[name_placeholder] = key
+            expressions.append(f"{name_placeholder} = {value_placeholder}")
+            values[value_placeholder] = _to_dynamodb_value(value)
 
         self._table.update_item(
             Key={"job_id": job_id},

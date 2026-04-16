@@ -98,8 +98,21 @@ def test_update_status_passes_extra_fields():
     repo, table = _make_repo()
     repo.update_status("job-1", JobStatus.COMPLETED, result_url="s3://bucket/result.json")
     values = table.update_item.call_args.kwargs["ExpressionAttributeValues"]
+    names = table.update_item.call_args.kwargs["ExpressionAttributeNames"]
+    update_expr = table.update_item.call_args.kwargs["UpdateExpression"]
     assert ":extra_result_url" in values
     assert values[":extra_result_url"] == "s3://bucket/result.json"
+    assert names["#extra_result_url"] == "result_url"
+    assert "#extra_result_url = :extra_result_url" in update_expr
+
+
+def test_update_status_handles_reserved_keyword_error_field():
+    repo, table = _make_repo()
+    repo.update_status("job-1", JobStatus.FAILED, error="boom")
+    names = table.update_item.call_args.kwargs["ExpressionAttributeNames"]
+    update_expr = table.update_item.call_args.kwargs["UpdateExpression"]
+    assert names["#extra_error"] == "error"
+    assert "#extra_error = :extra_error" in update_expr
 
 
 # ── update_progress ───────────────────────────────────────────────────────────
