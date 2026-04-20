@@ -336,35 +336,35 @@ Every response includes a top-level `code` field. `code = 0` means success. Any 
 
 ### API errors — returned directly in the response body
 
-| `code` | HTTP | Mô tả |
-|--------|------|-------|
-| `0` | — | Thành công |
-| `1001` | 400 | VALIDATION_ERROR — Request body sai schema (thiếu `pdf_url`, key không hợp lệ...) |
-| `1002` | 400 | INVALID_JSON — Body không phải JSON hợp lệ |
-| `1003` | 400 | INVALID_URL — `pdf_url` / `callback_url` không phải URL hợp lệ |
-| `1004` | 400 | URL_NOT_ALLOWED — URL trỏ vào địa chỉ nội bộ (SSRF protection) |
-| `2001` | 401 | UNAUTHORIZED — Thiếu hoặc sai `Authorization: Bearer <token>` |
-| `3001` | 404 | JOB_NOT_FOUND — Không tìm thấy job với `job_id` đã cho |
-| `3002` | 404 | NOT_FOUND — Route không tồn tại |
-| `5001` | 503 | DATABASE_ERROR — DynamoDB không phản hồi, có thể retry |
-| `5002` | 503 | QUEUE_ERROR — SQS không phản hồi, có thể retry |
-| `5003` | 500 | INTERNAL_ERROR — Lỗi không xác định ở tầng API |
+| `code` | HTTP | Description |
+|--------|------|-------------|
+| `0` | — | Success |
+| `1001` | 400 | VALIDATION_ERROR — Request body failed schema validation (missing `pdf_url`, invalid key, etc.) |
+| `1002` | 400 | INVALID_JSON — Request body is not valid JSON |
+| `1003` | 400 | INVALID_URL — `pdf_url` or `callback_url` is not a valid URL |
+| `1004` | 400 | URL_NOT_ALLOWED — URL resolves to a private/internal address (SSRF protection) |
+| `2001` | 401 | UNAUTHORIZED — Missing or invalid `Authorization: Bearer <token>` header |
+| `3001` | 404 | JOB_NOT_FOUND — No job exists with the given `job_id` |
+| `3002` | 404 | NOT_FOUND — Route does not exist |
+| `5001` | 503 | DATABASE_ERROR — DynamoDB unavailable, safe to retry |
+| `5002` | 503 | QUEUE_ERROR — SQS unavailable, safe to retry |
+| `5003` | 500 | INTERNAL_ERROR — Unexpected server error |
 
 Error response shape:
 ```json
 { "code": 2001, "message": "Missing or invalid Bearer token" }
 ```
 
-### Job pipeline errors — trong `GET /jobs/{job_id}` khi `status = "failed"`
+### Job pipeline errors — in `GET /jobs/{job_id}` when `status = "failed"`
 
-Khi job fail, `code` ở top-level = `error_code`, và `error` chứa mô tả chi tiết.
+When a job fails, the top-level `code` equals `error_code` and `error` contains the detail message.
 
-| `code` / `error_code` | Mô tả |
-|----------------------|-------|
-| `6001` | OCR_FAILED — Mistral OCR API lỗi (timeout, 5xx...) |
-| `6002` | RATE_LIMIT_ERROR — Chờ rate limit Mistral quá lâu |
-| `6003` | CHECKPOINT_ERROR — Lỗi lưu/tải checkpoint hoặc vượt max continuations |
-| `6004` | JOB_INTERNAL_ERROR — Lỗi không xác định trong pipeline xử lý |
+| `code` / `error_code` | Description |
+|----------------------|-------------|
+| `6001` | OCR_FAILED — Mistral OCR API call failed (timeout, 5xx, etc.) |
+| `6002` | RATE_LIMIT_ERROR — Waited too long for a Mistral rate limit slot |
+| `6003` | CHECKPOINT_ERROR — Checkpoint save/load failed or max continuations exceeded |
+| `6004` | JOB_INTERNAL_ERROR — Unexpected error during job processing |
 
 ## Authentication
 
