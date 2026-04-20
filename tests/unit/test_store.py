@@ -1,6 +1,7 @@
 """Unit tests for ResultStore S3 serialization round-trip."""
 
 import io
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -23,6 +24,7 @@ def _make_result() -> OCRResult:
         processed_pages=1,
         errors=[],
         metadata={},
+        pages_markdown=["text"],
     )
 
 
@@ -62,6 +64,34 @@ def test_put_result_returns_s3_uri():
     store, s3 = _make_store()
     uri = store.put_result("job-1", _make_result())
     assert uri == "s3://test-bucket/results/job-1/result.json"
+
+
+def test_put_result_keeps_only_top_level_extracted_fields():
+    store, s3 = _make_store()
+    result = OCRResult(
+        job_id="job-1",
+        status="completed",
+        pages=[
+            PageResult(
+                page_number=1,
+                markdown="text",
+                extracted_fields=[ExtractedField(key="ten_du_an", label="Ten du an", value="ABC", confidence=0.9)],
+            )
+        ],
+        total_pages=1,
+        processed_pages=1,
+        errors=[],
+        metadata={},
+        extracted_fields=[ExtractedField(key="ten_du_an", label="Ten du an", value="ABC", confidence=0.9)],
+        pages_markdown=["text"],
+    )
+    store.put_result("job-1", result)
+    raw = s3.put_object.call_args.kwargs["Body"].decode("utf-8")
+    payload = json.loads(raw)
+    assert "extracted_fields" in payload
+    assert "pages" not in payload
+    assert "pages_markdown" in payload
+    assert payload["pages_markdown"] == ["text"]
 
 
 # ── put_pages ─────────────────────────────────────────────────────────────────

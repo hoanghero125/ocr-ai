@@ -8,7 +8,11 @@ from src.models.result import ExtractedField, ExtractedTable, FreeTextBlock, OCR
 
 
 def _result_to_dict(result: OCRResult) -> dict:
-    return dataclasses.asdict(result)
+    payload = dataclasses.asdict(result)
+    # API contract: only expose merged top-level extracted_fields.
+    # Keep pages_markdown (full OCR text per page), drop pages (heavy internal objects).
+    payload.pop("pages", None)
+    return payload
 
 
 def _page_from_dict(d: dict) -> PageResult:
@@ -41,7 +45,6 @@ def _page_from_dict(d: dict) -> PageResult:
             for t in d.get("tables") or []
         ],
         extracted_fields=[_field(f) for f in d.get("extracted_fields") or []],
-        auto_fields=[_field(f) for f in d.get("auto_fields") or []],
         free_texts=[_free_text(f) for f in d.get("free_texts") or []],
         handwritten_percentage=d.get("handwritten_percentage", 0),
         confidence=d.get("confidence", 0.0),

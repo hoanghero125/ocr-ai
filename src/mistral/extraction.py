@@ -37,15 +37,9 @@ _SYSTEM_PROMPT = """You are a Vietnamese document field extractor. Given markdow
 - "handwritten": written by hand (pen, pencil)
 </field_type_rules>
 
-<key_generation>
-For auto_fields: generate snake_case keys from labels.
-Lowercase, replace spaces with underscores, remove Vietnamese diacritics.
-Examples: "Họ và tên" → "ho_va_ten", "Ngày sinh" → "ngay_sinh", "Số CMND" → "so_cmnd"
-</key_generation>
-
 <free_text_rules>
 Only classify as free_text if it is a narrative paragraph, letter body, or general note.
-Form fields (label:value pairs) must go in extracted_fields or auto_fields.
+Form fields (label:value pairs) must go in extracted_fields.
 position: "header" | "body" | "footer" | "signature" — use null if unclear.
 </free_text_rules>
 
@@ -70,12 +64,11 @@ Extract these fields EXACTLY (use the exact key values listed):
 {field_list}
 
 Place them in "extracted_fields". Include every listed field even if not found (value="" and confidence=0.0 when absent).
-After extracting specified fields, detect any OTHER important fields and put them in "auto_fields".
 </specified_fields>"""
     else:
         fields_section = """<auto_extraction>
 No specific fields requested. Extract ALL important fields automatically.
-Put everything in "auto_fields". Leave "extracted_fields" as an empty array.
+Put everything in "extracted_fields".
 </auto_extraction>"""
 
     return f"""{fields_section}
@@ -86,7 +79,6 @@ Put everything in "auto_fields". Leave "extracted_fields" as an empty array.
 
 Return JSON with exactly these keys:
 - extracted_fields: array of {{key, label, value, confidence, field_type}}
-- auto_fields: array of {{key, label, value, confidence, field_type}}
 - free_texts: array of {{content, confidence, field_type, position}}
 - confidence: overall page confidence (0.0–1.0)
 - handwritten_percentage: integer 0–100"""
@@ -152,10 +144,6 @@ def _parse_page_result(
             )
         extracted_fields.append(ef)
 
-    auto_fields = [
-        ef for ef in (_parse_field(f) for f in (data.get("auto_fields") or []))
-        if ef is not None
-    ]
     free_texts = [
         ft for ft in (_parse_free_text(f) for f in (data.get("free_texts") or []))
         if ft is not None
@@ -169,7 +157,6 @@ def _parse_page_result(
         markdown=page.markdown,
         tables=page.tables,
         extracted_fields=extracted_fields,
-        auto_fields=auto_fields,
         free_texts=free_texts,
         handwritten_percentage=handwritten_pct,
         confidence=page_confidence,
@@ -238,7 +225,6 @@ class ExtractionStage:
                         extra={
                             "page_num": page.page_number,
                             "extracted": len(result.extracted_fields),
-                            "auto": len(result.auto_fields),
                         },
                     )
                     if on_page_done:

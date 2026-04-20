@@ -10,7 +10,7 @@ from src.infra.webhook import WebhookClient
 from src.mistral.extraction import ExtractionStage
 from src.mistral.ocr import OCRStage
 from src.models.job import JobPayload, JobStatus
-from src.models.result import JobProgress, OCRResult, PageResult
+from src.models.result import JobProgress, OCRResult, PageResult, aggregate_extracted_fields
 from src.pipeline.continuation import ContinuationTrigger
 from src.shared.codes import CHECKPOINT_ERROR, JOB_INTERNAL_ERROR, OCR_FAILED, RATE_LIMIT_ERROR
 from src.shared.config import Settings
@@ -168,6 +168,8 @@ class OCRProcessor:
                 errors=[e for e in errors if e],
                 metadata=payload.metadata,
                 confidence=overall_confidence,
+                extracted_fields=aggregate_extracted_fields(pages),
+                pages_markdown=[p.markdown for p in pages],
             )
 
             result_url = self._store.put_result(job_id, result)

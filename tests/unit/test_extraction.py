@@ -55,11 +55,10 @@ def _make_chat_response(payload: dict) -> MagicMock:
     return response
 
 
-def _extraction_response(extracted: list = None, auto: list = None, free_texts: list = None,
+def _extraction_response(extracted: list = None, free_texts: list = None,
                           confidence: float = 0.9, handwritten_pct: int = 0) -> dict:
     return {
         "extracted_fields": extracted or [],
-        "auto_fields": auto or [],
         "free_texts": free_texts or [],
         "confidence": confidence,
         "handwritten_percentage": handwritten_pct,
@@ -117,21 +116,21 @@ async def test_field_missing_from_response_returns_empty_extracted():
     assert pages[0].extracted_fields == []
 
 
-# ── auto_fields and free_texts ────────────────────────────────────────────────
+# ── extracted_fields (auto mode) and free_texts ──────────────────────────────
 
 @pytest.mark.asyncio
-async def test_auto_fields_are_parsed():
+async def test_auto_mode_fields_are_parsed_into_extracted_fields():
     client = MagicMock()
     client.chat = AsyncMock(return_value=_make_chat_response(_extraction_response(
-        auto=[{"key": "ngay_thang", "label": "Ngày tháng", "value": "01/01/2024", "confidence": 0.95, "field_type": "typed"}]
+        extracted=[{"key": "ngay_thang", "label": "Ngày tháng", "value": "01/01/2024", "confidence": 0.95, "field_type": "typed"}]
     )))
     stage = _make_stage(client)
 
     pages = await stage.run([_make_page()], ())
 
-    assert len(pages[0].auto_fields) == 1
-    assert pages[0].auto_fields[0].key == "ngay_thang"
-    assert pages[0].auto_fields[0].value == "01/01/2024"
+    assert len(pages[0].extracted_fields) == 1
+    assert pages[0].extracted_fields[0].key == "ngay_thang"
+    assert pages[0].extracted_fields[0].value == "01/01/2024"
 
 
 @pytest.mark.asyncio

@@ -42,6 +42,7 @@ from pydantic import ValidationError
 
 from src.api.schemas import ProcessRequest, ProcessResponse
 from src.models.job import FieldInstruction, JobPayload
+from src.models.result import aggregate_extracted_fields
 from src.shared import codes
 from src.shared.exceptions import JobNotFoundError, SSRFBlockedError, ValidationError as OCRValidationError
 from src.shared.logging import get_logger
@@ -286,49 +287,15 @@ async def extract(http_request: Request):
         "status": "completed",
         "total_pages": len(pages),
         "confidence": overall_confidence,
-        "pages": [
+        "extracted_fields": [
             {
-                "page_number": p.page_number,
-                "handwritten_percentage": p.handwritten_percentage,
-                "extracted_fields": [
-                    {
-                        "key": f.key,
-                        "label": f.label,
-                        "value": f.value,
-                        "confidence": f.confidence,
-                        "field_type": f.field_type,
-                    }
-                    for f in p.extracted_fields
-                ],
-                "auto_fields": [
-                    {
-                        "key": f.key,
-                        "label": f.label,
-                        "value": f.value,
-                        "confidence": f.confidence,
-                        "field_type": f.field_type,
-                    }
-                    for f in p.auto_fields
-                ],
-                "tables": [
-                    {"headers": t.headers, "rows": t.rows}
-                    for t in p.tables
-                ],
-                "free_texts": [
-                    {
-                        "content": ft.content,
-                        "confidence": ft.confidence,
-                        "field_type": ft.field_type,
-                        "position": ft.position,
-                    }
-                    for ft in p.free_texts
-                ],
-                "confidence": p.confidence,
-                "status": p.status,
-                "error_message": p.error_message,
-                "error_step": p.error_step,
+                "key": f.key,
+                "label": f.label,
+                "value": f.value,
+                "confidence": f.confidence,
+                "field_type": f.field_type,
             }
-            for p in pages
+            for f in aggregate_extracted_fields(pages)
         ],
     }
 
