@@ -40,7 +40,7 @@ from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from src.api.schemas import ProcessRequest, ProcessResponse
+from src.api.schemas import ProcessRequest, ProcessResponse, RefineRequest
 from src.models.job import FieldInstruction, JobPayload
 from src.models.result import aggregate_extracted_fields
 from src.shared import codes
@@ -209,6 +209,49 @@ async def _run_job(payload: JobPayload) -> None:
     """Run the full OCR pipeline for a job (same code path as the Worker Lambda)."""
     processor = _container.get_processor()
     await processor.process(payload, context=None)
+
+
+@app.post("/jobs/{job_id}/refine", summary="Re-extract fields with a correction hint")
+async def refine_job(job_id: str, http_request: Request):
+    """
+    Re-run extraction on a completed job using stored OCR text — no re-OCR cost.
+    Pass field_instructions with a description that steers the model toward the correct value.
+    Only the listed fields are re-extracted; the stored result is updated in-place.
+    """
+    if (denied := _require_auth_or_401(http_request)) is not None:
+        return denied
+
+    try:
+        body_dict = await http_request.json()
+        request = RefineRequest.model_validate(body_dict)
+    except json.JSONDecodeError:
+        return _err(400, codes.INVALID_JSON, "Request body is not valid JSON")
+    except ValidationError as exc:
+        return _err(400, codes.VALIDATION_ERROR, str(exc))
+
+    from src.models.job import FieldInstruction
+    from src.shared.exceptions import JobNotFoundError
+
+    field_instructions = tuple(
+        FieldInstruction(
+            key=fi.key,
+            label=fi.label,
+            description=fi.description,
+            min_confidence=fi.min_confidence,
+        )
+        for fi in request.field_instructions
+    )
+
+    try:
+        result = await _container.get_refiner().refine(job_id, field_instructions)
+        return {"code": codes.SUCCESS, **result}
+    except JobNotFoundError:
+        return _err(404, codes.JOB_NOT_FOUND, f"Job {job_id} not found")
+    except ValueError as exc:
+        return _err(400, codes.VALIDATION_ERROR, str(exc))
+    except Exception as exc:
+        _log.error("refine_failed", extra={"code": codes.INTERNAL_ERROR, "job_id": job_id, "error": str(exc)}, exc_info=True)
+        return _err(500, codes.INTERNAL_ERROR, f"Refine failed: {exc}")
 
 
 @app.post("/extract", summary="Synchronous OCR + extraction — returns raw data immediately")

@@ -96,3 +96,19 @@ class ResultStore:
         response = self._s3.get_object(Bucket=self._bucket, Key=key)
         raw: list[dict] = json.loads(response["Body"].read())
         return [_page_from_dict(d) for d in raw]
+
+    def get_result(self, job_id: str) -> dict:
+        """Download the stored result JSON for a completed job."""
+        key = f"results/{job_id}/result.json"
+        response = self._s3.get_object(Bucket=self._bucket, Key=key)
+        return json.loads(response["Body"].read())
+
+    def put_result_raw(self, job_id: str, data: dict) -> None:
+        """Overwrite the stored result JSON in-place (used by refine to update extracted_fields)."""
+        key = f"results/{job_id}/result.json"
+        self._s3.put_object(
+            Bucket=self._bucket,
+            Key=key,
+            Body=json.dumps(data, default=str).encode(),
+            ContentType="application/json",
+        )
