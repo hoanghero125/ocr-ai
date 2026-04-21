@@ -1,5 +1,6 @@
 """ResultStore — S3 read/write for results and checkpoints with typed serialization."""
 
+import asyncio
 import dataclasses
 import json
 from typing import Any
@@ -67,48 +68,64 @@ class ResultStore:
         self._bucket = bucket
         self._base_url = base_url.rstrip("/")
 
-    def put_result(self, job_id: str, result: OCRResult) -> str:
+    async def put_result(self, job_id: str, result: OCRResult) -> str:
         """Serialize and upload the final OCR result. Returns a URL to the stored object."""
         key = f"results/{job_id}/result.json"
-        body = json.dumps(_result_to_dict(result), default=str)
-        self._s3.put_object(
+        body = json.dumps(_result_to_dict(result), default=str).encode()
+        await asyncio.to_thread(
+            self._s3.put_object,
             Bucket=self._bucket,
             Key=key,
-            Body=body.encode(),
+            Body=body,
             ContentType="application/json",
         )
         if self._base_url:
             return f"{self._base_url}/{key}"
         return f"s3://{self._bucket}/{key}"
 
-    def put_pages(self, key: str, pages: list[PageResult]) -> None:
-        """Serialize and upload a checkpoint page list to S3."""
-        body = json.dumps([dataclasses.asdict(p) for p in pages], default=str)
-        self._s3.put_object(
-            Bucket=self._bucket,
-            Key=key,
-            Body=body.encode(),
-            ContentType="application/json",
-        )
-
-    def get_pages(self, key: str) -> list[PageResult]:
-        """Download and deserialize a checkpoint page list into fully-typed objects."""
-        response = self._s3.get_object(Bucket=self._bucket, Key=key)
-        raw: list[dict] = json.loads(response["Body"].read())
-        return [_page_from_dict(d) for d in raw]
-
-    def get_result(self, job_id: str) -> dict:
-        """Download the stored result JSON for a completed job."""
-        key = f"results/{job_id}/result.json"
-        response = self._s3.get_object(Bucket=self._bucket, Key=key)
-        return json.loads(response["Body"].read())
-
-    def put_result_raw(self, job_id: str, data: dict) -> None:
+    async def put_result_raw(self, job_id: str, data: dict) -> None:
         """Overwrite the stored result JSON in-place (used by refine to update extracted_fields)."""
         key = f"results/{job_id}/result.json"
-        self._s3.put_object(
+        await asyncio.to_thread(
+            self._s3.put_object,
             Bucket=self._bucket,
             Key=key,
             Body=json.dumps(data, default=str).encode(),
             ContentType="application/json",
         )
+
+    async def put_pages(self, key: str, pages: list[PageResult]) -> None:
+        """Serialize and upload a checkpoint page list to S3."""
+        body = json.dumps([dataclasses.asdict(p) for p in pages], default=str).encode()
+        await asyncio.to_thread(
+            self._s3.put_object,
+            Bucket=self._bucket,
+            Key=key,
+            Body=body,
+            ContentType="application/json",
+        )
+
+    async def get_pages(self, key: str) -> list[PageResult]:
+        """Download and deserialize a checkpoint page list into fully-typed objects."""
+        try:
+            response = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
+            raw: list[dict] = json.loads(response["Body"].read())
+            return [_page_from_dict(d) for d in raw]
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load checkpoint {key}: {exc}") from exc
+
+    async def get_result(self, job_id: str) -> dict:
+        """Download the stored result JSON for a completed job."""
+        key = f"results/{job_id}/result.json"
+        try:
+            response = await asyncio.to_thread(self._s3.get_object, Bucket=self._bucket, Key=key)
+            return json.loads(response["Body"].read())
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load result for job {job_id}: {exc}") from exc
+
+    async def delete_pages(self, key: str) -> None:
+        """Delete a checkpoint object from S3. Best-effort — never raises."""
+        try:
+            await asyncio.to_thread(self._s3.delete_object, Bucket=self._bucket, Key=key)
+        except Exception:
+            pass

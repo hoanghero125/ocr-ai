@@ -75,7 +75,7 @@ class OCRProcessor:
             # ── STAGE 1: OCR ───────────────────────────────────────────
             if payload.ocr_checkpoint_key:
                 log.info("ocr_checkpoint_hit", extra={"key": payload.ocr_checkpoint_key})
-                pages = self._checkpoint.load_ocr_checkpoint(payload.ocr_checkpoint_key)
+                pages = await self._checkpoint.load_ocr_checkpoint(payload.ocr_checkpoint_key)
             else:
                 pages = await self._ocr.run(payload.pdf_url, job_id=job_id)
                 self._repo.update_progress(
@@ -101,7 +101,7 @@ class OCRProcessor:
                         "extraction_checkpoint_hit",
                         extra={"key": payload.extraction_checkpoint_key},
                     )
-                    start_pages = self._checkpoint.load_extraction_checkpoint(
+                    start_pages = await self._checkpoint.load_extraction_checkpoint(
                         payload.extraction_checkpoint_key
                     )
                     # Only re-extract pages that have no fields yet
@@ -112,12 +112,11 @@ class OCRProcessor:
                     done = []
 
                 total = len(pages)
+                _pending_done = [0]
 
                 def on_page_done(page_num: int, _total: int) -> None:
-                    processed = len(done) + sum(
-                        1 for p in start_pages
-                        if p.page_number == page_num or p.extracted_fields or p.error_message
-                    )
+                    _pending_done[0] += 1
+                    processed = len(done) + _pending_done[0]
                     self._repo.update_progress(
                         job_id,
                         JobProgress(
@@ -172,7 +171,13 @@ class OCRProcessor:
                 pages_markdown=[p.markdown for p in pages],
             )
 
-            result_url = self._store.put_result(job_id, result)
+            result_url = await self._store.put_result(job_id, result)
+
+            try:
+                await self._checkpoint.cleanup(payload)
+            except Exception as cleanup_exc:
+                log.warning("checkpoint_cleanup_failed", extra={"error": str(cleanup_exc)})
+
             self._repo.update_status(
                 job_id,
                 status,

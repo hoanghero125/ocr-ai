@@ -41,7 +41,7 @@ class RefineHandler:
         if status not in ("completed", "completed_with_errors"):
             raise ValueError(f"Job cannot be refined — current status: {status!r}")
 
-        stored = self._store.get_result(job_id)
+        stored = await self._store.get_result(job_id)
         pages_markdown: list[str] = stored.get("pages_markdown") or []
         original_fields: list[dict] = stored.get("extracted_fields") or []
 
@@ -72,7 +72,7 @@ class RefineHandler:
             merged[rf.key] = dataclasses.asdict(rf)
 
         stored["extracted_fields"] = list(merged.values())
-        self._store.put_result_raw(job_id, stored)
+        await self._store.put_result_raw(job_id, stored)
 
         log.info("refine_complete", extra={"refined_count": len(refined_fields)})
 

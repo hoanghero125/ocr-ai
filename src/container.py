@@ -152,6 +152,7 @@ def _build_processor(
         webhook=WebhookClient(
             timeout_s=settings.processing.webhook_timeout_s,
             max_retries=settings.processing.webhook_max_retries,
+            secret=settings.processing.webhook_secret,
         ),
         continuation=ContinuationTrigger(
             lambda_client=lambda_client,

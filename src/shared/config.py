@@ -51,6 +51,7 @@ class ProcessingSettings:
     webhook_timeout_s: int
     webhook_max_retries: int
     max_continuations: int
+    webhook_secret: str = ""
 
 
 @dataclass(frozen=True)
@@ -104,5 +105,6 @@ def get_settings() -> Settings:
             webhook_timeout_s=int(os.environ.get("WEBHOOK_TIMEOUT_S", "10")),
             webhook_max_retries=int(os.environ.get("WEBHOOK_MAX_RETRIES", "3")),
             max_continuations=int(os.environ.get("MAX_CONTINUATIONS", "5")),
+            webhook_secret=os.environ.get("WEBHOOK_SECRET", ""),
         ),
     )

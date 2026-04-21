@@ -229,9 +229,6 @@ async def refine_job(job_id: str, http_request: Request):
     except ValidationError as exc:
         return _err(400, codes.VALIDATION_ERROR, str(exc))
 
-    from src.models.job import FieldInstruction
-    from src.shared.exceptions import JobNotFoundError
-
     field_instructions = tuple(
         FieldInstruction(
             key=fi.key,
