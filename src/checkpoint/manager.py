@@ -25,7 +25,7 @@ class CheckpointManager:
         log = get_logger(__name__, job_id=job_id)
         key = f"checkpoints/{job_id}/ocr.json"
 
-        self._store.put_pages(key, pages)
+        await self._store.put_pages(key, pages)
 
         written = self._repo.conditional_write_checkpoint(
             job_id=job_id,
@@ -56,7 +56,7 @@ class CheckpointManager:
         log = get_logger(__name__, job_id=job_id)
         key = f"checkpoints/{job_id}/extraction.json"
 
-        self._store.put_pages(key, pages)
+        await self._store.put_pages(key, pages)
 
         # Zero-pad continuation_count so lexicographic comparison is correct
         idempotency_key = f"extraction-{job_id}-{payload.continuation_count:03d}"
@@ -77,10 +77,23 @@ class CheckpointManager:
             continuation_count=payload.continuation_count + 1,
         )
 
-    def load_ocr_checkpoint(self, key: str) -> list[PageResult]:
-        """Load OCR pages from S3 checkpoint. Delegates entirely to ResultStore."""
-        return self._store.get_pages(key)
+    async def load_ocr_checkpoint(self, key: str) -> list[PageResult]:
+        """Load OCR pages from S3 checkpoint."""
+        try:
+            return await self._store.get_pages(key)
+        except Exception as exc:
+            raise CheckpointError(f"Failed to load OCR checkpoint: {exc}") from exc
 
-    def load_extraction_checkpoint(self, key: str) -> list[PageResult]:
+    async def load_extraction_checkpoint(self, key: str) -> list[PageResult]:
         """Load partially-extracted pages from S3 checkpoint."""
-        return self._store.get_pages(key)
+        try:
+            return await self._store.get_pages(key)
+        except Exception as exc:
+            raise CheckpointError(f"Failed to load extraction checkpoint: {exc}") from exc
+
+    async def cleanup(self, payload: JobPayload) -> None:
+        """Delete S3 checkpoint files for a completed job. Best-effort."""
+        if payload.ocr_checkpoint_key:
+            await self._store.delete_pages(payload.ocr_checkpoint_key)
+        if payload.extraction_checkpoint_key:
+            await self._store.delete_pages(payload.extraction_checkpoint_key)

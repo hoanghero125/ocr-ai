@@ -2,7 +2,7 @@
 
 import io
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -46,27 +46,31 @@ def _round_trip_store() -> tuple[ResultStore, list]:
 
 # ── put_result ────────────────────────────────────────────────────────────────
 
-def test_put_result_calls_put_object():
+@pytest.mark.asyncio
+async def test_put_result_calls_put_object():
     store, s3 = _make_store()
-    store.put_result("job-1", _make_result())
+    await store.put_result("job-1", _make_result())
     s3.put_object.assert_called_once()
 
 
-def test_put_result_uses_correct_key():
+@pytest.mark.asyncio
+async def test_put_result_uses_correct_key():
     store, s3 = _make_store()
-    store.put_result("job-1", _make_result())
+    await store.put_result("job-1", _make_result())
     kwargs = s3.put_object.call_args.kwargs
     assert kwargs["Key"] == "results/job-1/result.json"
     assert kwargs["Bucket"] == "test-bucket"
 
 
-def test_put_result_returns_s3_uri():
+@pytest.mark.asyncio
+async def test_put_result_returns_s3_uri():
     store, s3 = _make_store()
-    uri = store.put_result("job-1", _make_result())
+    uri = await store.put_result("job-1", _make_result())
     assert uri == "s3://test-bucket/results/job-1/result.json"
 
 
-def test_put_result_keeps_only_top_level_extracted_fields():
+@pytest.mark.asyncio
+async def test_put_result_keeps_only_top_level_extracted_fields():
     store, s3 = _make_store()
     result = OCRResult(
         job_id="job-1",
@@ -85,7 +89,7 @@ def test_put_result_keeps_only_top_level_extracted_fields():
         extracted_fields=[ExtractedField(key="ten_du_an", label="Ten du an", value="ABC", confidence=0.9)],
         pages_markdown=["text"],
     )
-    store.put_result("job-1", result)
+    await store.put_result("job-1", result)
     raw = s3.put_object.call_args.kwargs["Body"].decode("utf-8")
     payload = json.loads(raw)
     assert "extracted_fields" in payload
@@ -96,16 +100,18 @@ def test_put_result_keeps_only_top_level_extracted_fields():
 
 # ── put_pages ─────────────────────────────────────────────────────────────────
 
-def test_put_pages_calls_put_object_with_correct_key():
+@pytest.mark.asyncio
+async def test_put_pages_calls_put_object_with_correct_key():
     store, s3 = _make_store()
-    store.put_pages("checkpoints/job-1/ocr.json", [PageResult(page_number=1, markdown="hi")])
+    await store.put_pages("checkpoints/job-1/ocr.json", [PageResult(page_number=1, markdown="hi")])
     s3.put_object.assert_called_once()
     assert s3.put_object.call_args.kwargs["Key"] == "checkpoints/job-1/ocr.json"
 
 
 # ── get_pages round-trip ──────────────────────────────────────────────────────
 
-def test_get_pages_returns_typed_page_results():
+@pytest.mark.asyncio
+async def test_get_pages_returns_typed_page_results():
     store, _ = _round_trip_store()
     pages = [
         PageResult(
@@ -115,8 +121,8 @@ def test_get_pages_returns_typed_page_results():
             extracted_fields=[ExtractedField(key="name", label="Name", value="Alice", confidence=0.9)],
         )
     ]
-    store.put_pages("test/key.json", pages)
-    result = store.get_pages("test/key.json")
+    await store.put_pages("test/key.json", pages)
+    result = await store.get_pages("test/key.json")
 
     assert isinstance(result[0], PageResult)
     assert isinstance(result[0].tables[0], ExtractedTable)
@@ -126,18 +132,43 @@ def test_get_pages_returns_typed_page_results():
     assert result[0].tables[0].rows == [["1", "2"]]
 
 
-def test_get_pages_preserves_page_error():
+@pytest.mark.asyncio
+async def test_get_pages_preserves_page_error():
     store, _ = _round_trip_store()
     pages = [PageResult(page_number=1, markdown="text", error_message="extraction failed")]
-    store.put_pages("test/key.json", pages)
-    result = store.get_pages("test/key.json")
+    await store.put_pages("test/key.json", pages)
+    result = await store.get_pages("test/key.json")
     assert result[0].error_message == "extraction failed"
 
 
-def test_get_pages_handles_empty_tables_and_fields():
+@pytest.mark.asyncio
+async def test_get_pages_handles_empty_tables_and_fields():
     store, _ = _round_trip_store()
     pages = [PageResult(page_number=1, markdown="text")]
-    store.put_pages("test/key.json", pages)
-    result = store.get_pages("test/key.json")
+    await store.put_pages("test/key.json", pages)
+    result = await store.get_pages("test/key.json")
     assert result[0].tables == []
     assert result[0].extracted_fields == []
+
+
+@pytest.mark.asyncio
+async def test_get_pages_raises_on_s3_error():
+    store, s3 = _make_store()
+    s3.get_object = MagicMock(side_effect=Exception("NoSuchKey"))
+    with pytest.raises(RuntimeError, match="Failed to load checkpoint"):
+        await store.get_pages("checkpoints/job-1/ocr.json")
+
+
+@pytest.mark.asyncio
+async def test_get_result_raises_on_s3_error():
+    store, s3 = _make_store()
+    s3.get_object = MagicMock(side_effect=Exception("NoSuchKey"))
+    with pytest.raises(RuntimeError, match="Failed to load result"):
+        await store.get_result("job-1")
+
+
+@pytest.mark.asyncio
+async def test_delete_pages_swallows_error():
+    store, s3 = _make_store()
+    s3.delete_object = MagicMock(side_effect=Exception("boom"))
+    await store.delete_pages("checkpoints/job-1/ocr.json")  # should not raise

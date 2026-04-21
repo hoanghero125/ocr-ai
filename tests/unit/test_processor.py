@@ -39,6 +39,7 @@ def _make_settings(continuation_enabled: bool = True) -> Settings:
             webhook_timeout_s=10,
             webhook_max_retries=3,
             max_continuations=5,
+            webhook_secret="",
         ),
     )
 
@@ -78,12 +79,13 @@ def _make_processor(
     checkpoint.save_after_extraction = AsyncMock(side_effect=lambda jid, pgs, pl: dataclasses.replace(
         pl, extraction_checkpoint_key="checkpoints/job-1/extraction.json", continuation_count=pl.continuation_count + 1
     ))
-    checkpoint.load_ocr_checkpoint = MagicMock(return_value=pages or _make_pages())
-    checkpoint.load_extraction_checkpoint = MagicMock(return_value=pages or _make_pages())
+    checkpoint.load_ocr_checkpoint = AsyncMock(return_value=pages or _make_pages())
+    checkpoint.load_extraction_checkpoint = AsyncMock(return_value=pages or _make_pages())
+    checkpoint.cleanup = AsyncMock()
 
     repo = MagicMock()
     store = MagicMock()
-    store.put_result = MagicMock(return_value="s3://bucket/results/job-1/result.json")
+    store.put_result = AsyncMock(return_value="s3://bucket/results/job-1/result.json")
 
     webhook = MagicMock()
     webhook.send = AsyncMock()

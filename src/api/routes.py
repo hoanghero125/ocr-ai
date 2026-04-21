@@ -17,7 +17,6 @@ from src.api.schemas import ProcessRequest, ProcessResponse, RefineRequest, Stat
 from src.models.job import FieldInstruction, JobPayload
 from src.shared import codes
 from src.shared.exceptions import JobNotFoundError, SSRFBlockedError, ValidationError as OCRValidationError
-from src.models.job import FieldInstruction
 from src.shared.logging import get_logger
 from src.shared.url_validator import validate_url
 
