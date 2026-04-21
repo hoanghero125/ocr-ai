@@ -61,6 +61,7 @@ python scripts/local_server.py
 |--------|------|-------------|
 | `POST` | `/process` | Submit a PDF for async processing — returns `job_id` immediately |
 | `GET` | `/jobs/{job_id}` | Poll job status and get `result_url` when done |
+| `POST` | `/jobs/{job_id}/refine` | Re-extract specific fields with a correction hint — no re-OCR |
 | `POST` | `/extract` | Synchronous OCR + extraction — returns raw data immediately (no queue) |
 | `GET` | `/health` | Health check |
 | `GET` | `/docs` | Swagger UI |
@@ -165,6 +166,44 @@ If `callback_url` was provided, the worker POSTs this to it when the job reaches
 ```
 
 Retries 3× with exponential backoff on 5xx. Permanent failure on 4xx. `callback_url` must be `https://`.
+
+### Re-extract with a correction hint
+
+If a field comes back `null` (confidence below `min_confidence`) or with a wrong value, call `/refine` to steer the model without re-running OCR:
+
+```
+POST /jobs/{job_id}/refine
+Content-Type: application/json
+```
+
+```json
+{
+  "field_instructions": [
+    {
+      "key": "ngay_sinh",
+      "label": "Ngay sinh",
+      "description": "Birth date in top-right corner, format DD/MM/YYYY",
+      "min_confidence": 0.6
+    }
+  ]
+}
+```
+
+- Only the fields listed are re-extracted — other fields in the original result are untouched
+- The stored result at `result_url` is updated in-place with the refined values
+- Job must be in `completed` or `completed_with_errors` status
+
+Response `200`:
+```json
+{
+  "code": 0,
+  "job_id": "550e8400-...",
+  "refined_fields": [
+    { "key": "ngay_sinh", "label": "Ngay sinh", "value": "15/03/1990", "confidence": 0.88, "field_type": "typed" }
+  ],
+  "pages_reprocessed": 3
+}
+```
 
 ### Result JSON structure
 

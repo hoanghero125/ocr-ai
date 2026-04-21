@@ -100,6 +100,21 @@ class ProcessRequest(BaseModel):
         return self
 
 
+class RefineRequest(BaseModel):
+    field_instructions: list[FieldInstructionSchema]
+
+    @model_validator(mode="after")
+    def check_field_instructions(self) -> "RefineRequest":
+        if not self.field_instructions:
+            raise ValueError("field_instructions must not be empty")
+        if len(self.field_instructions) > _MAX_FIELD_INSTRUCTIONS:
+            raise ValueError(f"field_instructions may not exceed {_MAX_FIELD_INSTRUCTIONS} items")
+        keys = [fi.key for fi in self.field_instructions]
+        if len(keys) != len(set(keys)):
+            raise ValueError("field_instructions must have unique keys")
+        return self
+
+
 class ProcessResponse(BaseModel):
     code: int = 0
     job_id: str

@@ -13,10 +13,11 @@ from typing import Any
 import boto3
 from pydantic import ValidationError
 
-from src.api.schemas import ProcessRequest, ProcessResponse, StatusResponse
+from src.api.schemas import ProcessRequest, ProcessResponse, RefineRequest, StatusResponse
 from src.models.job import FieldInstruction, JobPayload
 from src.shared import codes
 from src.shared.exceptions import JobNotFoundError, SSRFBlockedError, ValidationError as OCRValidationError
+from src.models.job import FieldInstruction
 from src.shared.logging import get_logger
 from src.shared.url_validator import validate_url
 
@@ -107,27 +108,27 @@ def _build_openapi_spec() -> dict:
                 "All endpoints except `/health`, `/docs`, `/openapi.json` require:\n\n"
                 "```\nAuthorization: Bearer <token>\n```\n\n"
                 "## Response codes\n\n"
-                "Mọi response đều có field `code`. `code = 0` là thành công.\n\n"
-                "### API errors — trong response body khi HTTP status >= 400\n\n"
-                "| `code` | HTTP | Mô tả |\n"
-                "|--------|------|-------|\n"
-                "| `1001` | 400 | VALIDATION_ERROR — Request body sai schema (thiếu `pdf_url`, v.v.) |\n"
-                "| `1002` | 400 | INVALID_JSON — Body không phải JSON hợp lệ |\n"
-                "| `1003` | 400 | INVALID_URL — `pdf_url` / `callback_url` không phải URL hợp lệ |\n"
-                "| `1004` | 400 | URL_NOT_ALLOWED — URL trỏ vào địa chỉ nội bộ (SSRF) |\n"
-                "| `2001` | 401 | UNAUTHORIZED — Thiếu hoặc sai `Authorization: Bearer <token>` |\n"
-                "| `3001` | 404 | JOB_NOT_FOUND — Không tìm thấy job với `job_id` đã cho |\n"
-                "| `3002` | 404 | NOT_FOUND — Route không tồn tại |\n"
-                "| `5001` | 503 | DATABASE_ERROR — DynamoDB không phản hồi — retry được |\n"
-                "| `5002` | 503 | QUEUE_ERROR — SQS không phản hồi — retry được |\n"
-                "| `5003` | 500 | INTERNAL_ERROR — Lỗi không xác định ở tầng API |\n\n"
-                "### Job pipeline errors — trong `GET /jobs/{job_id}` khi `status = failed`\n\n"
-                "| `error_code` | Mô tả |\n"
-                "|--------------|-------|\n"
-                "| `6001` | OCR_FAILED — Mistral OCR API lỗi |\n"
-                "| `6002` | RATE_LIMIT_ERROR — Chờ rate limit quá lâu |\n"
-                "| `6003` | CHECKPOINT_ERROR — Lỗi checkpoint hoặc vượt max continuations |\n"
-                "| `6004` | JOB_INTERNAL_ERROR — Lỗi không xác định trong pipeline |\n"
+                "Every response includes a top-level `code` field. `code = 0` means success.\n\n"
+                "### API errors — returned in the response body when HTTP status >= 400\n\n"
+                "| `code` | HTTP | Description |\n"
+                "|--------|------|-------------|\n"
+                "| `1001` | 400 | VALIDATION_ERROR — Request body failed schema validation (missing `pdf_url`, invalid key, etc.) |\n"
+                "| `1002` | 400 | INVALID_JSON — Request body is not valid JSON |\n"
+                "| `1003` | 400 | INVALID_URL — `pdf_url` or `callback_url` is not a valid URL |\n"
+                "| `1004` | 400 | URL_NOT_ALLOWED — URL resolves to a private/internal address (SSRF protection) |\n"
+                "| `2001` | 401 | UNAUTHORIZED — Missing or invalid `Authorization: Bearer <token>` header |\n"
+                "| `3001` | 404 | JOB_NOT_FOUND — No job exists with the given `job_id` |\n"
+                "| `3002` | 404 | NOT_FOUND — Route does not exist |\n"
+                "| `5001` | 503 | DATABASE_ERROR — DynamoDB unavailable, safe to retry |\n"
+                "| `5002` | 503 | QUEUE_ERROR — SQS unavailable, safe to retry |\n"
+                "| `5003` | 500 | INTERNAL_ERROR — Unexpected server error |\n\n"
+                "### Job pipeline errors — in `GET /jobs/{job_id}` when `status = failed`\n\n"
+                "| `error_code` | Description |\n"
+                "|--------------|-------------|\n"
+                "| `6001` | OCR_FAILED — Mistral OCR API call failed (timeout, 5xx, etc.) |\n"
+                "| `6002` | RATE_LIMIT_ERROR — Waited too long for a Mistral rate limit slot |\n"
+                "| `6003` | CHECKPOINT_ERROR — Checkpoint save/load failed or max continuations exceeded |\n"
+                "| `6004` | JOB_INTERNAL_ERROR — Unexpected error during job processing |\n"
             ),
         },
         "components": {
@@ -249,6 +250,92 @@ def _build_openapi_spec() -> dict:
                     },
                 }
             },
+            "/jobs/{job_id}/refine": {
+                "post": {
+                    "summary": "Re-extract fields with a correction hint",
+                    "operationId": "refineJob",
+                    "description": (
+                        "Re-runs field extraction on a completed job using the stored OCR text — **no re-OCR cost**. "
+                        "Pass updated `field_instructions` with a `description` that steers the model "
+                        "(e.g. *'Look in the top-right corner, format DD/MM/YYYY'*). "
+                        "Only the fields listed are re-extracted; the stored result is updated in-place.\n\n"
+                        "**Requirements:** job must be in `completed` or `completed_with_errors` status."
+                    ),
+                    "security": [{"BearerAuth": []}],
+                    "parameters": [
+                        {
+                            "name": "job_id",
+                            "in": "path",
+                            "required": True,
+                            "schema": {"type": "string", "format": "uuid"},
+                        }
+                    ],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["field_instructions"],
+                                    "properties": {
+                                        "field_instructions": {
+                                            "type": "array",
+                                            "minItems": 1,
+                                            "items": {"$ref": "#/components/schemas/FieldInstructionSchema"},
+                                            "description": "Fields to re-extract. Include a `description` with the correction hint.",
+                                        }
+                                    },
+                                    "example": {
+                                        "field_instructions": [
+                                            {
+                                                "key": "ngay_sinh",
+                                                "label": "Ngay sinh",
+                                                "description": "Birth date in top-right corner, format DD/MM/YYYY",
+                                                "min_confidence": 0.6,
+                                            }
+                                        ]
+                                    },
+                                }
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Re-extraction successful",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "code": {"type": "integer", "example": 0},
+                                            "job_id": {"type": "string", "format": "uuid"},
+                                            "refined_fields": {
+                                                "type": "array",
+                                                "description": "Newly extracted values for the requested fields",
+                                                "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "key": {"type": "string"},
+                                                        "label": {"type": "string"},
+                                                        "value": {"type": "string", "nullable": True},
+                                                        "confidence": {"type": "number"},
+                                                        "field_type": {"type": "string", "enum": ["typed", "handwritten"]},
+                                                    },
+                                                },
+                                            },
+                                            "pages_reprocessed": {"type": "integer"},
+                                        },
+                                    }
+                                }
+                            },
+                        },
+                        "400": error_response("VALIDATION_ERROR — job not completed, empty field_instructions, or no OCR text stored"),
+                        "401": error_response("UNAUTHORIZED — missing or invalid Bearer token"),
+                        "404": error_response("JOB_NOT_FOUND — no job with this id"),
+                        "500": error_response("INTERNAL_ERROR — extraction or storage failure"),
+                    },
+                }
+            },
             "/health": {
                 "get": {
                     "summary": "Health check",
@@ -349,6 +436,10 @@ async def handle_api_event(event: dict, context: object, container: object) -> d
 
         if method == "POST" and path == "/process":
             result = await _handle_process(event, container)
+        elif method == "POST" and path.startswith("/jobs/") and path.endswith("/refine"):
+            parts = path.split("/")
+            job_id = parts[2] if len(parts) >= 4 else ""
+            result = await _handle_refine(job_id, event, container)
         elif method == "GET" and path.startswith("/jobs/"):
             job_id = path.split("/jobs/", 1)[1].strip("/")
             result = await _handle_get_job(job_id, container)
@@ -479,6 +570,38 @@ async def _handle_get_job(job_id: str, container: object) -> dict:
             updated_at=item["updated_at"],
         ).model_dump(),
     )
+
+
+async def _handle_refine(job_id: str, event: dict, container: object) -> dict:
+    raw_body = event.get("body") or "{}"
+    try:
+        body_dict = json.loads(raw_body)
+        request = RefineRequest.model_validate(body_dict)
+    except json.JSONDecodeError:
+        return _error(400, codes.INVALID_JSON, "Request body is not valid JSON")
+    except ValidationError as exc:
+        return _error(400, codes.VALIDATION_ERROR, str(exc))
+
+    field_instructions = tuple(
+        FieldInstruction(
+            key=fi.key,
+            label=fi.label,
+            description=fi.description,
+            min_confidence=fi.min_confidence,
+        )
+        for fi in request.field_instructions
+    )
+
+    try:
+        result = await container.get_refiner().refine(job_id, field_instructions)
+        return _response(200, {"code": codes.SUCCESS, **result})
+    except JobNotFoundError:
+        return _error(404, codes.JOB_NOT_FOUND, f"Job {job_id} not found")
+    except ValueError as exc:
+        return _error(400, codes.VALIDATION_ERROR, str(exc))
+    except Exception as exc:
+        _logger.error("refine_failed", extra={"code": codes.INTERNAL_ERROR, "job_id": job_id, "error": str(exc)}, exc_info=True)
+        return _error(500, codes.INTERNAL_ERROR, f"Refine failed: {exc}")
 
 
 async def _handle_openapi() -> dict:
