@@ -314,6 +314,7 @@ Local dev with Docker reads variables from **`docker-compose.yml`** (Compose can
 | `LAMBDA_EXTRACT_CONTINUATION_ENABLED` | `false` | Enable timeout-based continuation |
 | `WEBHOOK_TIMEOUT_S` | `10` | Webhook HTTP timeout |
 | `WEBHOOK_MAX_RETRIES` | `3` | Webhook retry attempts |
+| `WEBHOOK_SECRET` | `""` | HMAC secret for webhook signature — if set, adds `X-OCR-Signature: sha256=<hmac>` header so receivers can verify authenticity (empty = disabled) |
 | `HTTP_API_BASE_URL` | `https://ocr-ai.digeni.vn` | Public API base URL |
 | `WORKER_FUNCTION_NAME` | `""` | Worker Lambda name for self-invocation |
 | `API_TOKEN` | `""` | Bearer token for API auth (empty = disabled) |
