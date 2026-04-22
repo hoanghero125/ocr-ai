@@ -487,6 +487,7 @@ async def _handle_process(event: dict, container: object) -> dict:
             label=fi.label,
             description=fi.description,
             min_confidence=fi.min_confidence,
+            data_type=fi.data_type,
         )
         for fi in request.field_instructions
     )
@@ -587,6 +588,7 @@ async def _handle_refine(job_id: str, event: dict, container: object) -> dict:
             label=fi.label,
             description=fi.description,
             min_confidence=fi.min_confidence,
+            data_type=fi.data_type,
         )
         for fi in request.field_instructions
     )

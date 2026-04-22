@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _KEY_PATTERN = re.compile(r"^[a-zA-Z0-9_]+$")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -14,11 +14,17 @@ _MAX_LABEL_LEN = 200
 _MAX_DESCRIPTION_LEN = 500
 
 
+_VALID_DATA_TYPES = {"TEXT", "NUMBER", "DATE"}
+
+
 class FieldInstructionSchema(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     key: str
     label: str
     description: str = ""
     min_confidence: float | None = None
+    data_type: str | None = Field(default=None, alias="dataType")
 
     @field_validator("key")
     @classmethod
@@ -52,6 +58,13 @@ class FieldInstructionSchema(BaseModel):
     def confidence_range(cls, v: float | None) -> float | None:
         if v is not None and not (0.0 <= v <= 1.0):
             raise ValueError("min_confidence must be between 0.0 and 1.0")
+        return v
+
+    @field_validator("data_type")
+    @classmethod
+    def validate_data_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in _VALID_DATA_TYPES:
+            raise ValueError(f"dataType must be one of: {', '.join(sorted(_VALID_DATA_TYPES))}")
         return v
 
 

@@ -49,6 +49,13 @@ Typed documents with no filled fields = 0. Forms with handwritten entries = 20â€
 </handwritten_percentage>"""
 
 
+_DATA_TYPE_HINTS: dict[str, str] = {
+    "TEXT": "plain text string",
+    "NUMBER": "numeric value only, no units or currency symbols",
+    "DATE": "date formatted as dd/MM/yyyy",
+}
+
+
 def _build_prompt(markdown: str, field_instructions: list[FieldInstruction]) -> str:
     truncated = markdown[:_MAX_PAGE_TEXT_LEN]
 
@@ -57,6 +64,7 @@ def _build_prompt(markdown: str, field_instructions: list[FieldInstruction]) -> 
             f'- key: "{fi.key}", label: "{fi.label}"'
             + (f', hint: "{fi.description}"' if fi.description else "")
             + (f", min_confidence: {fi.min_confidence}" if fi.min_confidence is not None else "")
+            + (f', dataType: {fi.data_type} ({_DATA_TYPE_HINTS[fi.data_type]})' if fi.data_type else "")
             for fi in field_instructions
         )
         fields_section = f"""<specified_fields>

@@ -143,6 +143,7 @@ async def process(http_request: Request, background_tasks: BackgroundTasks):
             label=fi.label,
             description=fi.description,
             min_confidence=fi.min_confidence,
+            data_type=fi.data_type,
         )
         for fi in request.field_instructions
     )
@@ -235,6 +236,7 @@ async def refine_job(job_id: str, http_request: Request):
             label=fi.label,
             description=fi.description,
             min_confidence=fi.min_confidence,
+            data_type=fi.data_type,
         )
         for fi in request.field_instructions
     )
@@ -282,6 +284,7 @@ async def extract(http_request: Request):
             label=fi.label,
             description=fi.description,
             min_confidence=fi.min_confidence,
+            data_type=fi.data_type,
         )
         for fi in request.field_instructions
     ]

@@ -18,6 +18,7 @@ def _payload_from_dict(d: dict) -> JobPayload:
             label=fi["label"],
             description=fi.get("description", ""),
             min_confidence=fi.get("min_confidence"),
+            data_type=fi.get("data_type"),
         )
         for fi in d.get("field_instructions") or []
     )
