@@ -112,6 +112,7 @@ Response `202`:
 - `label` — human-readable name shown to the model, max 200 chars
 - `description` _(optional)_ — extra context for the model, max 500 chars
 - `min_confidence` _(optional)_ — threshold 0.0–1.0; extracted values below this are returned as `null`
+- `dataType` _(optional)_ — instructs the model how to format the extracted value: `TEXT` (plain string), `NUMBER` (numeric value only, no units), `DATE` (format `dd/MM/yyyy`)
 
 ### Poll job status
 

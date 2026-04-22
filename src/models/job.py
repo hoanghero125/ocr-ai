@@ -18,6 +18,7 @@ class FieldInstruction:
     label: str
     description: str = ""
     min_confidence: float | None = None
+    data_type: str | None = None  # "TEXT" | "NUMBER" | "DATE"
 
 
 @dataclass(frozen=True)
